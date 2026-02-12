@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+/* Ta couleur de fond */
+@theme {
+  --color-citadelle-gold: #d4af37;
+  --color-citadelle-dark: #1a1a1a;
+  --color-citadelle-paper: #f4e4bc;
+}
+
+body {
+  background-color: var(--color-citadelle-dark);
+  color: white;
+}
