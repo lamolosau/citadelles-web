@@ -18,6 +18,8 @@ function App() {
   const [currentTurnNumber, setCurrentTurnNumber] = useState(1);
   const [turnPhase, setTurnPhase] = useState("resource");
   const [drawOptions, setDrawOptions] = useState([]);
+  const [killedId, setKilledId] = useState(null);
+  const [robbedId, setRobbedId] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const myIdRef = useRef(null);
@@ -75,6 +77,8 @@ function App() {
             setGameStatus(room.status);
             setRoomHostId(room.host_id);
             setCurrentTurnNumber(room.current_character_turn || 1);
+            setKilledId(room.killed_char_id);
+            setRobbedId(room.robbed_char_id);
             setView(room.status === "waiting" ? "lobby" : "game");
           }
         }
@@ -183,17 +187,17 @@ function App() {
     clearSession();
   };
 
-  const shuffle = (array) => {
-    let m = array.length,
+  const shuffle = (a) => {
+    let m = a.length,
       t,
       i;
     while (m) {
       i = Math.floor(Math.random() * m--);
-      t = array[m];
-      array[m] = array[i];
-      array[i] = t;
+      t = a[m];
+      a[m] = a[i];
+      a[i] = t;
     }
-    return array;
+    return a;
   };
 
   const startGame = async () => {
@@ -202,12 +206,12 @@ function App() {
     setLoading(true);
     let d = shuffle([...DISTRICTS]);
     for (const p of active) {
-      const initialHand = d.splice(0, 4).map((c) => c.id);
+      const hand = d.splice(0, 4).map((c) => c.id);
       await supabase
         .from("players")
         .update({
           gold: 2,
-          hand: initialHand,
+          hand,
           city: [],
           characters: [],
           played_characters: [],
@@ -218,7 +222,7 @@ function App() {
     setLoading(false);
   };
 
-  const prepareDraft = async (idStack) => {
+  const prepareDraft = async (stack) => {
     let c = shuffle([...CHARACTERS]);
     const fd = c.pop();
     await supabase
@@ -229,33 +233,31 @@ function App() {
       .from("rooms")
       .update({
         status: "drafting",
-        district_stack: idStack,
+        district_stack: stack,
         draft_pile: c,
         face_down_char: fd.id,
         current_player_index: 0,
         current_character_turn: 1,
         draft_sub_step: "pick",
+        killed_char_id: null,
+        robbed_char_id: null,
       })
       .eq("id", roomId);
   };
 
-  // --- LOGIQUE DRAFT 2 JOUEURS (RÈGLE DUEL CORRIGÉE) ---
   const pickCharacter = async (cid) => {
     const active = players.filter((p) => onlineIds.includes(p.user_id));
     const me = active.find((p) => p.user_id === myId);
     const pile = draftPile.filter((x) => x.id !== cid);
-
     if (active.length === 2) {
       if (draftSubStep === "pick") {
-        const newChars = [...(me.characters || []), cid];
+        const newC = [...(me.characters || []), cid];
         await supabase
           .from("players")
-          .update({ characters: newChars })
+          .update({ characters: newC })
           .eq("user_id", myId)
           .eq("room_id", roomId);
-
-        // RÈGLE DU DERNIER CHOIX : S'il ne reste qu'une carte après mon choix, le draft s'arrête net.
-        if (pile.length === 1) {
+        if (pile.length === 1)
           await supabase
             .from("rooms")
             .update({
@@ -265,9 +267,7 @@ function App() {
               current_character_turn: 1,
             })
             .eq("id", roomId);
-        }
-        // RÈGLE DU PREMIER CHOIX : Pile de 7 -> 6, on passe sans défausser.
-        else if (draftPile.length === 7) {
+        else if (draftPile.length === 7)
           await supabase
             .from("rooms")
             .update({
@@ -275,19 +275,12 @@ function App() {
               current_player_index: (currentPlayerIndex + 1) % 2,
             })
             .eq("id", roomId);
-        }
-        // CAS GÉNÉRAL : On doit défausser
-        else {
+        else
           await supabase
             .from("rooms")
-            .update({
-              draft_pile: pile,
-              draft_sub_step: "discard",
-            })
+            .update({ draft_pile: pile, draft_sub_step: "discard" })
             .eq("id", roomId);
-        }
       } else {
-        // ÉTAPE DÉFAUSSE : On retire la carte et on passe au suivant.
         await supabase
           .from("rooms")
           .update({
@@ -300,7 +293,22 @@ function App() {
     }
   };
 
-  // --- ACTIONS DE TOUR ---
+  const useAssassinPower = async (targetId) => {
+    await supabase
+      .from("rooms")
+      .update({ killed_char_id: targetId })
+      .eq("id", roomId);
+    setTurnPhase("resource");
+  };
+
+  const useThiefPower = async (targetId) => {
+    await supabase
+      .from("rooms")
+      .update({ robbed_char_id: targetId })
+      .eq("id", roomId);
+    setTurnPhase("resource");
+  };
+
   const takeGold = async () => {
     const me = players.find((p) => p.user_id === myId);
     await supabase
@@ -318,16 +326,15 @@ function App() {
         .select("district_stack")
         .eq("id", roomId)
         .single();
-      let stack = (r.district_stack || []).map((item) =>
-        typeof item === "object" ? item.id : item,
+      let s = (r.district_stack || []).map((i) =>
+        typeof i === "object" ? i.id : i,
       );
-      if (stack.length < 2) stack = shuffle([...DISTRICTS]).map((c) => c.id);
-      const stackToUse = [...stack];
-      const opts = stackToUse.splice(0, 2);
+      if (s.length < 2) s = shuffle([...DISTRICTS]).map((c) => c.id);
+      const opts = s.splice(0, 2);
       setDrawOptions(opts);
       await supabase
         .from("rooms")
-        .update({ district_stack: stackToUse })
+        .update({ district_stack: s })
         .eq("id", roomId);
       setTurnPhase("drawing");
     } catch (err) {
@@ -371,8 +378,12 @@ function App() {
       })
       .eq("user_id", myId)
       .eq("room_id", roomId);
-    const nextCall = currentTurnNumber + 1;
-    if (nextCall > 8) {
+    await nextCall();
+  };
+
+  const nextCall = async () => {
+    const next = currentTurnNumber + 1;
+    if (next > 8) {
       const { data: r } = await supabase
         .from("rooms")
         .select("district_stack")
@@ -382,13 +393,13 @@ function App() {
     } else {
       await supabase
         .from("rooms")
-        .update({ current_character_turn: nextCall })
+        .update({ current_character_turn: next })
         .eq("id", roomId);
     }
     setTurnPhase("resource");
   };
 
-  const skipChar = async () => {
+  const skipCall = async () => {
     const next = currentTurnNumber + 1;
     if (next > 8) {
       const { data: r } = await supabase
@@ -404,7 +415,6 @@ function App() {
         .eq("id", roomId);
   };
 
-  // --- TEMPS RÉEL ---
   useEffect(() => {
     if (!roomId || !myId) return;
     const refresh = async () => {
@@ -426,6 +436,8 @@ function App() {
         setDraftPile(r.draft_pile || []);
         setDraftSubStep(r.draft_sub_step);
         setCurrentTurnNumber(r.current_character_turn || 1);
+        setKilledId(r.killed_char_id);
+        setRobbedId(r.robbed_char_id);
         if (r.status !== "waiting") setView("game");
         else setView("lobby");
       }
@@ -456,8 +468,7 @@ function App() {
         refresh,
       )
       .on("presence", { event: "sync" }, () => {
-        const state = channel.presenceState();
-        const cOn = Object.keys(state);
+        const cOn = Object.keys(channel.presenceState());
         setOnlineIds(cOn);
         const active = playersRef.current.filter((p) =>
           cOn.includes(p.user_id),
@@ -480,7 +491,34 @@ function App() {
     return () => supabase.removeChannel(channel);
   }, [roomId, myId]);
 
-  // --- RENDU ---
+  useEffect(() => {
+    const me = players.find((p) => p.user_id === myId);
+    if (
+      gameStatus === "playing" &&
+      (me?.characters || []).includes(currentTurnNumber) &&
+      currentTurnNumber === robbedId &&
+      me.gold > 0
+    ) {
+      const thief = players.find((p) => (p.characters || []).includes(2));
+      if (thief) {
+        const amount = me.gold;
+        supabase
+          .from("players")
+          .update({ gold: 0 })
+          .eq("user_id", myId)
+          .eq("room_id", roomId)
+          .then(() => {
+            supabase
+              .from("players")
+              .update({ gold: (thief.gold || 0) + amount })
+              .eq("user_id", thief.user_id)
+              .eq("room_id", roomId)
+              .then();
+          });
+      }
+    }
+  }, [currentTurnNumber, robbedId]);
+
   if (loading)
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center text-amber-500 font-bold uppercase tracking-[0.3em]">
@@ -534,7 +572,7 @@ function App() {
       <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center relative">
         <button
           onClick={leaveRoom}
-          className="absolute top-6 right-6 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/50 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+          className="absolute top-6 right-6 bg-red-500/10 text-red-500 border border-red-500/50 px-4 py-2 rounded-xl text-[10px] font-black uppercase"
         >
           Quitter X
         </button>
@@ -571,17 +609,13 @@ function App() {
             ))}
           </div>
         </div>
-        {myId === roomHostId ? (
+        {myId === roomHostId && (
           <button
             onClick={startGame}
-            className="mt-10 bg-green-600 px-16 py-5 rounded-2xl font-black text-xl hover:bg-green-500 shadow-2xl shadow-green-900/40"
+            className="mt-10 bg-green-600 px-16 py-5 rounded-2xl font-black text-xl hover:bg-green-500"
           >
             LANCER LA PARTIE
           </button>
-        ) : (
-          <p className="mt-10 text-slate-500 text-xs font-bold italic animate-pulse">
-            L'hôte prépare les cartes...
-          </p>
         )}
       </div>
     );
@@ -597,9 +631,18 @@ function App() {
     const owner = players.find((p) =>
       (p.characters || []).includes(currentTurnNumber),
     );
+    const isDead = currentTurnNumber === killedId;
+    const killedCharName = CHARACTERS.find((c) => c.id === killedId)?.name;
 
     return (
       <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center w-full">
+        {/* BANDEAU D'ANNONCE ASSASSINAT */}
+        {killedId && (
+          <div className="w-full max-w-4xl bg-red-600 text-white text-[10px] font-black uppercase tracking-[0.3em] py-2 px-4 rounded-full mb-4 text-center animate-pulse shadow-[0_0_15px_rgba(220,38,38,0.5)]">
+            L'assassin a frappé : Le {killedCharName} est mort !
+          </div>
+        )}
+
         <div className="w-full max-w-4xl flex justify-between items-center bg-slate-800 p-4 rounded-2xl border-b-4 border-slate-700 mb-6 shadow-2xl">
           <span className="font-black text-amber-500 tracking-tighter">
             CITADELLES
@@ -658,7 +701,7 @@ function App() {
             ) : (
               <div className="bg-slate-800/30 p-16 rounded-[3rem] border border-slate-700/50 backdrop-blur-sm">
                 <p className="text-xl text-slate-500 font-bold uppercase tracking-widest">
-                  C'est au tour de{" "}
+                  Tour de{" "}
                   <span className="text-white underline decoration-amber-500 underline-offset-8">
                     {activeOn[currentPlayerIndex]?.pseudo}
                   </span>
@@ -670,12 +713,11 @@ function App() {
           <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-slate-800/50 p-6 rounded-3xl border border-slate-700">
               <h3 className="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest text-center">
-                Ma Cité ({(me?.city || []).length})
+                Ma Cité
               </h3>
               <div className="grid grid-cols-1 gap-2">
                 {(me?.city || []).map((id) => {
                   const c = DISTRICTS.find((d) => d.id === id);
-                  if (!c) return null;
                   return (
                     <div
                       key={id}
@@ -689,7 +731,9 @@ function App() {
             </div>
 
             <div className="md:col-span-2 space-y-6">
-              <div className="bg-slate-800 p-8 rounded-[2.5rem] border border-slate-700 shadow-2xl relative overflow-hidden">
+              <div
+                className={`bg-slate-800 p-8 rounded-[2.5rem] border-2 shadow-2xl relative overflow-hidden transition-colors ${isDead ? "border-red-600" : "border-slate-700"}`}
+              >
                 <div className="absolute top-4 right-6 text-[10px] font-black text-slate-600 uppercase">
                   Appel {currentTurnNumber}/8
                 </div>
@@ -704,19 +748,100 @@ function App() {
                   </h2>
                 </div>
 
-                {isMyCharTurn ? (
+                {isDead ? (
+                  <div className="text-center py-10">
+                    <h2 className="text-5xl font-black text-red-600 uppercase tracking-tighter mb-2">
+                      CADAVRE !
+                    </h2>
+                    <p className="text-slate-400 italic">
+                      Ce personnage ne peut pas agir.
+                    </p>
+                    {myId === roomHostId && (
+                      <button
+                        onClick={skipCall}
+                        className="mt-8 bg-slate-700 hover:bg-slate-600 px-8 py-3 rounded-2xl text-xs font-black tracking-widest uppercase"
+                      >
+                        Passer au suivant
+                      </button>
+                    )}
+                  </div>
+                ) : isMyCharTurn ? (
                   <div className="space-y-6">
+                    {/* POUVOIR ASSASSIN (AVEC SÉCURITÉ ANTI-AUTO-TUER) */}
+                    {currentTurnNumber === 1 && !killedId && (
+                      <div className="p-4 bg-red-900/20 rounded-2xl border border-red-500/50">
+                        <p className="text-red-500 font-black text-center mb-4 text-xs uppercase italic">
+                          Contrat de mort :
+                        </p>
+                        <div className="flex flex-wrap gap-2 justify-center">
+                          {CHARACTERS.filter((c) => c.id > 1).map((c) => {
+                            const isMyOtherChar = (
+                              me?.characters || []
+                            ).includes(c.id);
+                            return (
+                              <button
+                                key={c.id}
+                                onClick={() =>
+                                  !isMyOtherChar && useAssassinPower(c.id)
+                                }
+                                disabled={isMyOtherChar}
+                                className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all 
+                                                    ${isMyOtherChar ? "bg-slate-700 text-slate-500 opacity-50 cursor-not-allowed" : "bg-red-600 hover:bg-red-500"}`}
+                              >
+                                {isMyOtherChar
+                                  ? `Toi (${c.name})`
+                                  : `Tuer ${c.name}`}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* POUVOIR VOLEUR */}
+                    {currentTurnNumber === 2 && !robbedId && (
+                      <div className="p-4 bg-amber-900/20 rounded-2xl border border-amber-500/50">
+                        <p className="text-amber-500 font-black text-center mb-4 text-xs uppercase italic">
+                          Cible du larcin :
+                        </p>
+                        <div className="flex flex-wrap gap-2 justify-center">
+                          {CHARACTERS.filter(
+                            (c) => c.id > 2 && c.id !== killedId,
+                          ).map((c) => {
+                            const isMyOtherChar = (
+                              me?.characters || []
+                            ).includes(c.id);
+                            return (
+                              <button
+                                key={c.id}
+                                onClick={() =>
+                                  !isMyOtherChar && useThiefPower(c.id)
+                                }
+                                disabled={isMyOtherChar}
+                                className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all 
+                                                    ${isMyOtherChar ? "bg-slate-700 text-slate-500 opacity-50 cursor-not-allowed" : "bg-amber-600 hover:bg-amber-500"}`}
+                              >
+                                {isMyOtherChar
+                                  ? `Toi (${c.name})`
+                                  : `Voler ${c.name}`}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
                     {turnPhase === "resource" && (
                       <div className="grid grid-cols-2 gap-4 animate-fade-in">
                         <button
                           onClick={takeGold}
-                          className="bg-yellow-600 p-6 rounded-2xl font-black text-xl hover:bg-yellow-500 shadow-lg"
+                          className="bg-yellow-600 p-6 rounded-2xl font-black text-xl hover:bg-yellow-500 shadow-lg transition-transform active:scale-95"
                         >
                           PRENDRE 2 OR
                         </button>
                         <button
                           onClick={startDraw}
-                          className="bg-blue-600 p-6 rounded-2xl font-black text-xl hover:bg-blue-500 shadow-lg"
+                          className="bg-blue-600 p-6 rounded-2xl font-black text-xl hover:bg-blue-500 shadow-lg transition-transform active:scale-95"
                         >
                           PIOCHER 2
                         </button>
@@ -726,7 +851,6 @@ function App() {
                       <div className="grid grid-cols-2 gap-4 animate-fade-in">
                         {drawOptions.map((id) => {
                           const c = DISTRICTS.find((d) => d.id === id);
-                          if (!c) return null;
                           return (
                             <button
                               key={id}
@@ -744,13 +868,9 @@ function App() {
                     )}
                     {turnPhase === "build" && (
                       <div className="space-y-4 animate-fade-in">
-                        <p className="text-[10px] font-black text-green-500 uppercase tracking-widest text-center">
-                          Bâtir un quartier ?
-                        </p>
                         <div className="flex flex-wrap gap-2 justify-center p-2">
                           {(me?.hand || []).map((id) => {
                             const c = DISTRICTS.find((d) => d.id === id);
-                            if (!c) return null;
                             const can =
                               (me?.gold || 0) >= c.cost &&
                               !(me?.city || []).includes(id);
@@ -801,7 +921,7 @@ function App() {
                         </p>
                         {myId === roomHostId && (
                           <button
-                            onClick={skipChar}
+                            onClick={skipCall}
                             className="bg-slate-700 px-6 py-2 rounded-full text-[10px] font-black hover:bg-slate-600 transition-colors"
                           >
                             PASSER AU SUIVANT (HÔTE)
@@ -820,7 +940,6 @@ function App() {
                 <div className="flex flex-wrap gap-2 pb-2">
                   {(me?.hand || []).map((id) => {
                     const c = DISTRICTS.find((d) => d.id === id);
-                    if (!c) return null;
                     return (
                       <div
                         key={id}
