@@ -1,87 +1,81 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabase";
+import { DISTRICTS, CHARACTERS } from "./cards";
 
 function App() {
   const [view, setView] = useState("login");
   const [pseudo, setPseudo] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [roomId, setRoomId] = useState(null);
-
-  const [players, setPlayers] = useState([]);
+  const [players, setPlayers] = useState([]); // Joueurs en base de données
+  const [onlineIds, setOnlineIds] = useState([]); // IDs des gens REELLEMENT connectés
   const [myId, setMyId] = useState(null);
   const [roomHostId, setRoomHostId] = useState(null);
-
+  const [gameStatus, setGameStatus] = useState("waiting");
+  const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
+  const [draftPile, setDraftPile] = useState([]);
+  const [draftSubStep, setDraftSubStep] = useState("pick");
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState(null);
 
-  // Refs pour la logique temps réel
   const myIdRef = useRef(null);
-  const roomHostIdRef = useRef(null);
   const roomIdRef = useRef(null);
-  const isSystemReadyRef = useRef(false); // Sécurité : "Temps de chauffe"
 
   useEffect(() => {
     myIdRef.current = myId;
-    roomHostIdRef.current = roomHostId;
     roomIdRef.current = roomId;
-  }, [myId, roomHostId, roomId]);
+  }, [myId, roomId]);
 
-  // --- 1. RESTAURATION ---
+  // --- RESTAURATION DE SESSION ---
   useEffect(() => {
-    restoreSession();
+    const restore = async () => {
+      setLoading(true);
+      const sRoomId = localStorage.getItem("citadelles_room_id");
+      const sPlayerId = localStorage.getItem("citadelles_player_id");
+      const sCode = localStorage.getItem("citadelles_room_code");
+
+      if (sRoomId && sPlayerId) {
+        const { data: room } = await supabase
+          .from("rooms")
+          .select("*")
+          .eq("id", sRoomId)
+          .single();
+        if (room) {
+          const { data: p } = await supabase
+            .from("players")
+            .select("*")
+            .eq("user_id", sPlayerId)
+            .eq("room_id", sRoomId)
+            .single();
+          if (p) {
+            setMyId(sPlayerId);
+            setRoomId(sRoomId);
+            setRoomCode(sCode);
+            setPseudo(p.pseudo);
+            setGameStatus(room.status);
+            setRoomHostId(room.host_id);
+            setView(room.status === "waiting" ? "lobby" : "game");
+          }
+        }
+      }
+      setLoading(false);
+    };
+    restore();
   }, []);
 
-  const restoreSession = async () => {
-    setLoading(true);
-    const savedRoom = localStorage.getItem("citadelles_room_id");
-    const savedPlayerId = localStorage.getItem("citadelles_player_id");
-    const savedCode = localStorage.getItem("citadelles_room_code");
-
-    if (savedRoom && savedPlayerId && savedCode) {
-      const { data: room } = await supabase
-        .from("rooms")
-        .select("*")
-        .eq("id", savedRoom)
-        .single();
-
-      if (room) {
-        setRoomId(savedRoom);
-        setMyId(savedPlayerId);
-        setRoomCode(savedCode);
-        setRoomHostId(room.host_id);
-
-        const { data: pData } = await supabase
-          .from("players")
-          .select("pseudo")
-          .eq("user_id", savedPlayerId)
-          .eq("room_id", savedRoom)
-          .single();
-        if (pData) {
-          setPseudo(pData.pseudo);
-          setView("lobby");
-        } else {
-          clearSession();
-        }
-      } else {
-        clearSession();
-      }
-    }
-    setLoading(false);
+  const saveSession = (rid, uid, code) => {
+    localStorage.setItem("citadelles_room_id", rid);
+    localStorage.setItem("citadelles_player_id", uid);
+    localStorage.setItem("citadelles_room_code", code);
   };
 
   const clearSession = () => {
     localStorage.clear();
     setView("login");
-    setPlayers([]);
-    setPseudo("");
-    setRoomCode("");
-    setRoomHostId(null);
+    setRoomId(null);
     setMyId(null);
-    setLoading(false);
   };
 
-  // --- 2. ACTIONS ---
-
+  // --- ACTIONS ---
   const getUserId = async () => {
     const { data } = await supabase.auth.getSession();
     if (data.session?.user) return data.session.user.id;
@@ -90,74 +84,63 @@ function App() {
   };
 
   const createRoom = async () => {
-    if (!pseudo) return alert("Choisis un pseudo !");
+    if (!pseudo) return;
     setLoading(true);
     try {
-      const userId = await getUserId();
+      const uid = await getUserId();
       const code = Math.random().toString(36).substring(2, 6).toUpperCase();
-
-      const { data: room, error } = await supabase
+      const { data: room } = await supabase
         .from("rooms")
-        .insert([{ code, host_id: userId, status: "waiting" }])
+        .insert([{ code, host_id: uid, status: "waiting" }])
         .select()
         .single();
-
-      if (error) throw error;
-
-      await addPlayerToRoom(room.id, userId, pseudo);
-      saveSession(room.id, userId, code);
-
-      setMyId(userId);
-      setRoomHostId(userId);
-      setRoomCode(code);
+      await supabase
+        .from("players")
+        .insert([
+          { room_id: room.id, user_id: uid, pseudo, joined_at: new Date() },
+        ]);
+      saveSession(room.id, uid, code);
+      setMyId(uid);
       setRoomId(room.id);
+      setRoomCode(code);
+      setRoomHostId(uid);
       setView("lobby");
     } catch (e) {
-      setErrorMsg(e.message);
+      console.error(e);
     }
     setLoading(false);
   };
 
   const joinRoom = async () => {
-    if (!pseudo || !roomCode) return alert("Infos manquantes");
+    if (!pseudo || !roomCode) return;
     setLoading(true);
     try {
-      const userId = await getUserId();
-      const { data: room, error } = await supabase
+      const uid = await getUserId();
+      const { data: room } = await supabase
         .from("rooms")
         .select()
         .eq("code", roomCode)
         .single();
-
-      if (error || !room) {
-        setLoading(false);
-        return alert("Room introuvable");
-      }
-
+      if (!room) throw new Error("Salle introuvable");
       const { data: existing } = await supabase
         .from("players")
         .select()
         .eq("room_id", room.id)
-        .eq("user_id", userId)
+        .eq("user_id", uid)
         .single();
-
-      if (!existing) {
-        await addPlayerToRoom(room.id, userId, pseudo);
-      } else {
-        if (existing.pseudo !== pseudo)
-          await supabase
-            .from("players")
-            .update({ pseudo })
-            .eq("id", existing.id);
-      }
-
-      saveSession(room.id, userId, roomCode);
-      setMyId(userId);
-      setRoomHostId(room.host_id);
+      if (!existing)
+        await supabase
+          .from("players")
+          .insert([
+            { room_id: room.id, user_id: uid, pseudo, joined_at: new Date() },
+          ]);
+      saveSession(room.id, uid, roomCode);
+      setMyId(uid);
       setRoomId(room.id);
-      setView("lobby");
+      setRoomHostId(room.host_id);
+      setView(room.status === "waiting" ? "lobby" : "game");
     } catch (e) {
-      setErrorMsg(e.message);
+      alert(e.message);
     }
     setLoading(false);
   };
@@ -168,184 +151,210 @@ function App() {
         .from("players")
         .delete()
         .match({ user_id: myId, room_id: roomId });
-      if (myId === roomHostId && players.length > 1) {
-        const nextPlayer = players.find((p) => p.user_id !== myId);
-        if (nextPlayer) {
-          await supabase
-            .from("rooms")
-            .update({ host_id: nextPlayer.user_id })
-            .eq("id", roomId);
-        }
-      }
     }
     clearSession();
   };
 
-  const saveSession = (rId, uId, code) => {
-    localStorage.setItem("citadelles_room_id", rId);
-    localStorage.setItem("citadelles_player_id", uId);
-    localStorage.setItem("citadelles_room_code", code);
+  const startGame = async () => {
+    // Filtrer pour ne garder que les joueurs REELLEMENT en ligne
+    const activePlayers = players.filter((p) => onlineIds.includes(p.user_id));
+    if (activePlayers.length < 2) return alert("Besoin de 2 joueurs connectés");
+
+    setLoading(true);
+    let d = [...DISTRICTS].sort(() => Math.random() - 0.5);
+    for (const p of activePlayers) {
+      await supabase
+        .from("players")
+        .update({
+          gold: 2,
+          hand: d.splice(0, 4).map((c) => c.id),
+          city: [],
+          characters: [],
+        })
+        .eq("id", p.id);
+    }
+    let c = [...CHARACTERS].sort(() => Math.random() - 0.5);
+    const fd = c.pop();
+    await supabase
+      .from("rooms")
+      .update({
+        status: "drafting",
+        district_stack: d,
+        draft_pile: c,
+        face_down_char: fd.id,
+        current_player_index: 0,
+        draft_sub_step: "pick",
+      })
+      .eq("id", roomId);
+    setLoading(false);
   };
 
-  const addPlayerToRoom = async (roomId, userId, name) => {
-    await supabase.from("players").insert([
-      {
-        room_id: roomId,
-        user_id: userId,
-        pseudo: name,
-        joined_at: new Date(),
-      },
-    ]);
+  const pickCharacter = async (cid) => {
+    // On récupère les joueurs ACTIFS uniquement pour le calcul du tour
+    const activePlayers = players.filter((p) => onlineIds.includes(p.user_id));
+    const me = activePlayers.find((p) => p.user_id === myId);
+    const pile = draftPile.filter((x) => x.id !== cid);
+
+    if (activePlayers.length === 2) {
+      if (draftSubStep === "pick") {
+        await supabase
+          .from("players")
+          .update({ characters: [...(me.characters || []), cid] })
+          .eq("user_id", myId)
+          .eq("room_id", roomId);
+        await supabase
+          .from("rooms")
+          .update({ draft_pile: pile, draft_sub_step: "discard" })
+          .eq("id", roomId);
+      } else {
+        if (pile.length <= 1) {
+          await supabase
+            .from("rooms")
+            .update({
+              status: "playing",
+              draft_pile: [],
+              draft_sub_step: "pick",
+              current_character_turn: 1,
+            })
+            .eq("id", roomId);
+        } else {
+          await supabase
+            .from("rooms")
+            .update({
+              draft_pile: pile,
+              draft_sub_step: "pick",
+              current_player_index: (currentPlayerIndex + 1) % 2,
+            })
+            .eq("id", roomId);
+        }
+      }
+    } else {
+      const newChars = [...(me.characters || []), cid];
+      await supabase
+        .from("players")
+        .update({ characters: newChars })
+        .eq("user_id", myId)
+        .eq("room_id", roomId);
+      const done = activePlayers.every((p) =>
+        p.user_id === myId
+          ? newChars.length >= 1
+          : (p.characters || []).length >= 1,
+      );
+      if (done)
+        await supabase
+          .from("rooms")
+          .update({
+            status: "playing",
+            draft_pile: [],
+            current_character_turn: 1,
+          })
+          .eq("id", roomId);
+      else
+        await supabase
+          .from("rooms")
+          .update({
+            draft_pile: pile,
+            current_player_index:
+              (currentPlayerIndex + 1) % activePlayers.length,
+          })
+          .eq("id", roomId);
+    }
   };
 
-  // --- 3. TEMPS RÉEL + NETTOYAGE SÉCURISÉ ---
-
+  // --- TEMPS RÉEL + PRÉSENCE ---
   useEffect(() => {
-    if (view !== "lobby" || !roomId || !myId) return;
+    if (!roomId || !myId) return;
 
-    // RESET DU SYSTEME DE SECURITE
-    isSystemReadyRef.current = false;
-    // On ne permet le nettoyage que dans 3 secondes (Temps de chauffe)
-    const safetyTimer = setTimeout(() => {
-      isSystemReadyRef.current = true;
-      console.log("Système de nettoyage : ACTIVÉ");
-    }, 3000);
-
-    const refreshState = async () => {
-      const { data: playersData } = await supabase
+    const refresh = async () => {
+      const { data: ps } = await supabase
         .from("players")
         .select("*")
         .eq("room_id", roomId)
         .order("joined_at", { ascending: true });
-      if (playersData) setPlayers(playersData);
-
-      const { data: roomData } = await supabase
+      if (ps) setPlayers(ps);
+      const { data: r } = await supabase
         .from("rooms")
-        .select("host_id")
+        .select("*")
         .eq("id", roomId)
         .single();
-      if (roomData) setRoomHostId(roomData.host_id);
+      if (r) {
+        setRoomHostId(r.host_id);
+        setGameStatus(r.status);
+        setCurrentPlayerIndex(r.current_player_index);
+        setDraftPile(r.draft_pile || []);
+        setDraftSubStep(r.draft_sub_step);
+        if (r.status !== "waiting") setView("game");
+      }
     };
 
-    refreshState();
+    refresh();
 
-    const channel = supabase.channel(`room_safe_${roomId}`, {
+    // Système de Présence
+    const channel = supabase.channel(`room-${roomId}`, {
       config: { presence: { key: myId } },
     });
 
-    // Écoute standard
-    channel.on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "players",
-        filter: `room_id=eq.${roomId}`,
-      },
-      refreshState,
-    );
-    channel.on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: "rooms",
-        filter: `id=eq.${roomId}`,
-      },
-      refreshState,
-    );
-
-    // ÉCOUTE DE PRÉSENCE (Le Nettoyeur)
-    channel.on("presence", { event: "sync" }, () => {
-      const state = channel.presenceState();
-      const onlineUserIds = Object.keys(state);
-
-      // On lance le nettoyage
-      secureCleanup(onlineUserIds);
-    });
-
-    channel.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        await channel.track({
-          online_at: new Date().toISOString(),
-          user_id: myId,
-        });
-      }
-    });
+    channel
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "players",
+          filter: `room_id=eq.${roomId}`,
+        },
+        refresh,
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "rooms",
+          filter: `id=eq.${roomId}`,
+        },
+        refresh,
+      )
+      .on("presence", { event: "sync" }, () => {
+        const state = channel.presenceState();
+        setOnlineIds(Object.keys(state)); // On met à jour la liste des gens en ligne
+      })
+      .subscribe(async (status) => {
+        if (status === "SUBSCRIBED") {
+          await channel.track({ online_at: new Date().toISOString() });
+        }
+      });
 
     return () => {
-      clearTimeout(safetyTimer);
       supabase.removeChannel(channel);
     };
-  }, [roomId, view, myId]);
-
-  // Fonction de nettoyage BLINDÉE
-  const secureCleanup = async (onlineUserIds) => {
-    // 1. Si le système chauffe encore, on ne fait RIEN.
-    if (!isSystemReadyRef.current) return;
-
-    // 2. Si je ne suis pas l'hôte OFFICIEL (DB), je ne touche à rien.
-    if (myIdRef.current !== roomHostIdRef.current) return;
-
-    // 3. Récupérer la vraie liste DB
-    const { data: dbPlayers } = await supabase
-      .from("players")
-      .select("*")
-      .eq("room_id", roomIdRef.current);
-    if (!dbPlayers) return;
-
-    // 4. Identifier les fantômes (Ceux en DB mais pas Online)
-    const ghosts = dbPlayers.filter((p) => !onlineUserIds.includes(p.user_id));
-
-    // 5. FILTRAGE DE SECURITE (Interdiction de se tuer soi-même)
-    const ghostsToKill = ghosts.filter((g) => g.user_id !== myIdRef.current);
-
-    if (ghostsToKill.length > 0) {
-      console.log(
-        "Nettoyage sécurisé des fantômes :",
-        ghostsToKill.map((g) => g.pseudo),
-      );
-      const ids = ghostsToKill.map((g) => g.user_id);
-      await supabase
-        .from("players")
-        .delete()
-        .in("user_id", ids)
-        .eq("room_id", roomIdRef.current);
-    }
-  };
+  }, [roomId, myId]);
 
   // --- RENDU ---
   if (loading)
     return (
-      <div className="min-h-screen bg-slate-900 text-amber-500 flex items-center justify-center">
-        Chargement...
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-amber-500 font-bold">
+        CHARGEMENT DU ROYAUME...
       </div>
     );
 
-  const isAmHost = myId && roomHostId && myId === roomHostId;
-
-  if (view === "login") {
+  if (view === "login")
     return (
       <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
-        <h1 className="text-6xl font-extrabold text-amber-500 mb-8 uppercase tracking-widest">
-          Citadelles
+        <h1 className="text-5xl font-black text-amber-500 mb-8 tracking-tighter">
+          CITADELLES
         </h1>
-        {errorMsg && (
-          <div className="text-red-400 mb-4 bg-red-900/20 p-2 rounded">
-            {errorMsg}
-          </div>
-        )}
-        <div className="bg-slate-800 p-8 rounded-2xl w-full max-w-md space-y-6 shadow-2xl border border-slate-700">
+        <div className="bg-slate-800 p-8 rounded-3xl w-full max-w-sm border border-slate-700 shadow-2xl">
           <input
             type="text"
             value={pseudo}
             onChange={(e) => setPseudo(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-600 rounded-lg py-3 px-4 focus:border-amber-500 outline-none"
-            placeholder="Ton Pseudo"
+            className="w-full bg-slate-900 p-4 rounded-xl mb-4 border border-slate-700 outline-none focus:border-amber-500"
+            placeholder="Ton pseudo..."
           />
           <button
             onClick={createRoom}
-            className="w-full bg-amber-600 hover:bg-amber-500 text-slate-900 font-bold py-4 rounded-xl shadow-lg transition-transform active:scale-95"
+            className="w-full bg-amber-600 p-4 rounded-xl font-bold mb-4 hover:bg-amber-500 transition-colors"
           >
             CRÉER UNE TABLE
           </button>
@@ -354,13 +363,13 @@ function App() {
               type="text"
               value={roomCode}
               onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-              className="w-24 bg-slate-900 border border-slate-600 rounded-lg px-4 text-center font-mono uppercase"
+              className="w-20 bg-slate-900 p-4 rounded-xl text-center font-mono"
               placeholder="CODE"
               maxLength={4}
             />
             <button
               onClick={joinRoom}
-              className="flex-1 bg-slate-700 hover:bg-slate-600 font-bold py-3 rounded-xl"
+              className="flex-1 bg-slate-700 p-4 rounded-xl font-bold hover:bg-slate-600"
             >
               REJOINDRE
             </button>
@@ -368,74 +377,175 @@ function App() {
         </div>
       </div>
     );
-  }
 
   if (view === "lobby") {
+    // ON NE MONTRE QUE LES JOUEURS REELLEMENT EN LIGNE
+    const activePlayers = players.filter((p) => onlineIds.includes(p.user_id));
+
     return (
-      <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center">
-        <div className="w-full max-w-2xl mt-10 text-center relative">
+      <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center">
+        {/* Bouton quitter déplacé pour ne pas gêner */}
+        <div className="w-full max-w-md flex justify-end">
           <button
             onClick={leaveRoom}
-            className="absolute -top-10 right-0 text-red-500 hover:text-red-400 text-sm font-bold flex items-center gap-1 bg-slate-800 px-3 py-1 rounded-full border border-red-900"
+            className="bg-red-900/20 text-red-500 px-4 py-2 rounded-xl text-[10px] font-black border border-red-900/50 hover:bg-red-900/40 tracking-widest uppercase"
           >
-            QUITTER X
+            Quitter la salle
           </button>
-          <p className="text-slate-400 uppercase tracking-widest text-sm mb-2">
-            Code de la salle
+        </div>
+
+        <div className="mt-12 text-center">
+          <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.3em] mb-4">
+            Code d'accès
           </p>
-          <div className="bg-slate-800 border-2 border-amber-500/50 rounded-2xl p-6 mb-8 inline-block shadow-lg">
-            <span className="text-5xl font-mono font-bold text-amber-500 tracking-[0.5em] ml-4">
+          <div className="bg-slate-800 px-10 py-5 rounded-3xl border-2 border-amber-500/20 shadow-2xl">
+            <span className="text-5xl font-mono font-black text-amber-500 tracking-[0.2em]">
               {roomCode}
             </span>
           </div>
         </div>
-        <div className="w-full max-w-2xl bg-slate-800 rounded-2xl p-6 border border-slate-700">
-          <h2 className="text-xl font-bold text-slate-300 mb-6 flex items-center gap-2">
-            JOUEURS{" "}
-            <span className="bg-amber-600 text-slate-900 text-xs px-2 py-1 rounded-full">
-              {players.length}/8
-            </span>
+
+        <div className="w-full max-w-md mt-12 bg-slate-800 rounded-3xl p-6 border border-slate-700 shadow-xl">
+          <h2 className="text-[10px] font-black text-slate-500 mb-6 uppercase tracking-widest">
+            Garde rapprochée ({activePlayers.length})
           </h2>
           <div className="space-y-3">
-            {players.map((player) => (
+            {activePlayers.map((p) => (
               <div
-                key={player.id}
-                className="flex items-center bg-slate-700/50 p-4 rounded-xl border border-slate-600"
+                key={p.id}
+                className="bg-slate-900/50 p-4 rounded-2xl flex justify-between items-center border border-slate-800 animate-fade-in"
               >
-                <div className="w-10 h-10 rounded-full bg-amber-700 flex items-center justify-center font-bold text-white mr-4">
-                  {player.pseudo ? player.pseudo.charAt(0).toUpperCase() : "?"}
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 bg-green-500 rounded-full shadow-[0_0_8px_rgba(34,197,94,0.6)]"></div>
+                  <span className="font-bold text-slate-200">{p.pseudo}</span>
                 </div>
-                <span className="font-medium text-lg text-slate-200">
-                  {player.pseudo}
-                </span>
-                {player.user_id === roomHostId && (
-                  <span className="ml-auto text-xs text-amber-500 font-bold uppercase">
-                    Hôte
-                  </span>
-                )}
-                {player.user_id === myId && (
-                  <span className="ml-2 text-xs text-slate-400 italic">
-                    (Toi)
+                {p.user_id === roomHostId && (
+                  <span className="text-[9px] bg-amber-500 text-black px-2 py-1 rounded-md font-black tracking-tighter">
+                    HÔTE
                   </span>
                 )}
               </div>
             ))}
+            {activePlayers.length === 0 && (
+              <p className="text-center text-slate-600 py-4 italic text-sm">
+                En attente de connexion...
+              </p>
+            )}
           </div>
         </div>
 
-        {isAmHost ? (
-          <button className="mt-8 w-full max-w-md bg-green-600 hover:bg-green-500 text-white font-bold py-4 rounded-xl shadow-lg text-xl transition-transform active:scale-95">
+        {myId === roomHostId ? (
+          <button
+            onClick={startGame}
+            className="mt-10 bg-green-600 px-16 py-5 rounded-2xl font-black text-xl hover:bg-green-500 shadow-2xl shadow-green-900/40 transition-all hover:-translate-y-1 active:translate-y-0"
+          >
             LANCER LA PARTIE
           </button>
         ) : (
-          <p className="mt-8 text-slate-500 animate-pulse">
-            En attente de l'hôte...
-          </p>
+          <div className="mt-10 flex flex-col items-center gap-2">
+            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-amber-500"></div>
+            <p className="text-slate-500 text-xs font-bold italic">
+              L'hôte prépare les cartes...
+            </p>
+          </div>
         )}
       </div>
     );
   }
-  return <div>Erreur</div>;
+
+  if (view === "game") {
+    const me = players.find((p) => p.user_id === myId);
+    // Filtrer les joueurs actifs pour le tour de jeu
+    const activePlayers = players.filter((p) => onlineIds.includes(p.user_id));
+    const isMyTurn = activePlayers[currentPlayerIndex]?.user_id === myId;
+
+    return (
+      <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center">
+        {/* UI du haut corrigée */}
+        <div className="w-full max-w-4xl flex justify-between items-center bg-slate-800 p-4 rounded-2xl border-b-4 border-slate-700 mb-6 shadow-2xl">
+          <span className="font-black text-amber-500 tracking-tighter">
+            CITADELLES
+          </span>
+          <div className="flex gap-6">
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] text-slate-500 font-black uppercase">
+                Trésor
+              </span>
+              <span className="text-yellow-500 font-black">{me?.gold} OR</span>
+            </div>
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] text-slate-400 font-black uppercase">
+                Cartes
+              </span>
+              <span className="text-blue-500 font-black">
+                {me?.hand?.length}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {gameStatus === "drafting" ? (
+          <div className="w-full max-w-4xl text-center">
+            <h2 className="text-2xl font-black mb-8 tracking-widest text-slate-400">
+              PHASE DE RECRUTEMENT
+            </h2>
+            {isMyTurn ? (
+              <div className="animate-fade-in">
+                <div
+                  className={`inline-block px-8 py-4 rounded-2xl border-2 mb-10 font-black uppercase tracking-widest transition-all ${draftSubStep === "discard" ? "bg-red-500/10 border-red-500 text-red-500 shadow-[0_0_20px_rgba(239,68,68,0.2)]" : "bg-green-500/10 border-green-500 text-green-500 shadow-[0_0_20px_rgba(34,197,94,0.2)]"}`}
+                >
+                  {draftSubStep === "discard"
+                    ? "🔥 Défausser une carte (SECRET)"
+                    : "👑 Choisir ton personnage"}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                  {draftPile.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => pickCharacter(c.id)}
+                      className="bg-slate-800 border-2 border-slate-700 p-8 rounded-3xl hover:border-amber-500 transition-all flex flex-col items-center group shadow-xl hover:-translate-y-2"
+                    >
+                      <div className="w-14 h-14 bg-slate-700 rounded-full flex items-center justify-center mb-4 font-black text-xl group-hover:bg-amber-500 group-hover:text-black transition-colors">
+                        {c.id}
+                      </div>
+                      <span className="font-black text-lg tracking-tight">
+                        {c.name}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-slate-800/30 p-16 rounded-[3rem] border border-slate-700/50 backdrop-blur-sm">
+                <div className="mb-4 flex justify-center">
+                  <div className="flex gap-1">
+                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-bounce"></div>
+                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-bounce [animation-delay:0.2s]"></div>
+                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-bounce [animation-delay:0.4s]"></div>
+                  </div>
+                </div>
+                <p className="text-xl text-slate-500 font-bold uppercase tracking-widest">
+                  C'est au tour de{" "}
+                  <span className="text-white underline decoration-amber-500 underline-offset-8">
+                    {activePlayers[currentPlayerIndex]?.pseudo}
+                  </span>
+                </p>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-center mt-20 animate-pulse">
+            <h1 className="text-6xl font-black text-green-500 mb-6 italic tracking-tighter underline">
+              LE JEU COMMENCE !
+            </h1>
+            <p className="text-slate-400 font-bold uppercase tracking-[0.5em]">
+              Préparez vos cités...
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  }
 }
 
 export default App;
