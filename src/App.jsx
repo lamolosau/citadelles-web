@@ -7,8 +7,8 @@ function App() {
   const [pseudo, setPseudo] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [roomId, setRoomId] = useState(null);
-  const [players, setPlayers] = useState([]); // Joueurs en base de données
-  const [onlineIds, setOnlineIds] = useState([]); // IDs des gens REELLEMENT connectés
+  const [players, setPlayers] = useState([]);
+  const [onlineIds, setOnlineIds] = useState([]);
   const [myId, setMyId] = useState(null);
   const [roomHostId, setRoomHostId] = useState(null);
   const [gameStatus, setGameStatus] = useState("waiting");
@@ -17,15 +17,20 @@ function App() {
   const [draftSubStep, setDraftSubStep] = useState("pick");
   const [loading, setLoading] = useState(true);
 
+  // Refs pour la logique de synchronisation
   const myIdRef = useRef(null);
   const roomIdRef = useRef(null);
+  const playersRef = useRef([]);
+  const roomHostIdRef = useRef(null);
 
   useEffect(() => {
     myIdRef.current = myId;
     roomIdRef.current = roomId;
-  }, [myId, roomId]);
+    playersRef.current = players;
+    roomHostIdRef.current = roomHostId;
+  }, [myId, roomId, players, roomHostId]);
 
-  // --- RESTAURATION DE SESSION ---
+  // --- RESTAURATION ---
   useEffect(() => {
     const restore = async () => {
       setLoading(true);
@@ -156,9 +161,8 @@ function App() {
   };
 
   const startGame = async () => {
-    // Filtrer pour ne garder que les joueurs REELLEMENT en ligne
     const activePlayers = players.filter((p) => onlineIds.includes(p.user_id));
-    if (activePlayers.length < 2) return alert("Besoin de 2 joueurs connectés");
+    if (activePlayers.length < 2) return alert("Besoin de 2 joueurs en ligne");
 
     setLoading(true);
     let d = [...DISTRICTS].sort(() => Math.random() - 0.5);
@@ -190,7 +194,6 @@ function App() {
   };
 
   const pickCharacter = async (cid) => {
-    // On récupère les joueurs ACTIFS uniquement pour le calcul du tour
     const activePlayers = players.filter((p) => onlineIds.includes(p.user_id));
     const me = activePlayers.find((p) => p.user_id === myId);
     const pile = draftPile.filter((x) => x.id !== cid);
@@ -229,6 +232,7 @@ function App() {
         }
       }
     } else {
+      // Logique 3+
       const newChars = [...(me.characters || []), cid];
       await supabase
         .from("players")
@@ -289,7 +293,6 @@ function App() {
 
     refresh();
 
-    // Système de Présence
     const channel = supabase.channel(`room-${roomId}`, {
       config: { presence: { key: myId } },
     });
@@ -317,7 +320,28 @@ function App() {
       )
       .on("presence", { event: "sync" }, () => {
         const state = channel.presenceState();
-        setOnlineIds(Object.keys(state)); // On met à jour la liste des gens en ligne
+        const currentOnlineIds = Object.keys(state);
+        setOnlineIds(currentOnlineIds);
+
+        // --- LOGIQUE DE DÉLÉGATION D'HÔTE ---
+        const activePlayers = playersRef.current.filter((p) =>
+          currentOnlineIds.includes(p.user_id),
+        );
+        if (activePlayers.length > 0) {
+          const hostOnline = currentOnlineIds.includes(roomHostIdRef.current);
+          // Si l'hôte n'est plus là, le premier de la liste des actifs prend le relais
+          if (!hostOnline) {
+            const nextHost = activePlayers[0];
+            if (nextHost.user_id === myIdRef.current) {
+              console.log("Délégation : Je deviens l'hôte.");
+              supabase
+                .from("rooms")
+                .update({ host_id: myIdRef.current })
+                .eq("id", roomIdRef.current)
+                .then();
+            }
+          }
+        }
       })
       .subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
@@ -333,8 +357,8 @@ function App() {
   // --- RENDU ---
   if (loading)
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-amber-500 font-bold">
-        CHARGEMENT DU ROYAUME...
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center text-amber-500 font-bold uppercase tracking-[0.3em]">
+        Citadelles...
       </div>
     );
 
@@ -379,27 +403,23 @@ function App() {
     );
 
   if (view === "lobby") {
-    // ON NE MONTRE QUE LES JOUEURS REELLEMENT EN LIGNE
     const activePlayers = players.filter((p) => onlineIds.includes(p.user_id));
 
     return (
-      <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center">
-        {/* Bouton quitter déplacé pour ne pas gêner */}
-        <div className="w-full max-w-md flex justify-end">
-          <button
-            onClick={leaveRoom}
-            className="bg-red-900/20 text-red-500 px-4 py-2 rounded-xl text-[10px] font-black border border-red-900/50 hover:bg-red-900/40 tracking-widest uppercase"
-          >
-            Quitter la salle
-          </button>
-        </div>
+      <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center relative">
+        <button
+          onClick={leaveRoom}
+          className="absolute top-6 right-6 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/50 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+        >
+          Quitter X
+        </button>
 
         <div className="mt-12 text-center">
           <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.3em] mb-4">
             Code d'accès
           </p>
           <div className="bg-slate-800 px-10 py-5 rounded-3xl border-2 border-amber-500/20 shadow-2xl">
-            <span className="text-5xl font-mono font-black text-amber-500 tracking-[0.2em]">
+            <span className="text-5xl font-mono font-black text-amber-500 tracking-[0.2em] select-all">
               {roomCode}
             </span>
           </div>
@@ -413,41 +433,33 @@ function App() {
             {activePlayers.map((p) => (
               <div
                 key={p.id}
-                className="bg-slate-900/50 p-4 rounded-2xl flex justify-between items-center border border-slate-800 animate-fade-in"
+                className="bg-slate-900/50 p-4 rounded-2xl flex justify-between items-center border border-slate-800"
               >
                 <div className="flex items-center gap-3">
                   <div className="w-2 h-2 bg-green-500 rounded-full shadow-[0_0_8px_rgba(34,197,94,0.6)]"></div>
                   <span className="font-bold text-slate-200">{p.pseudo}</span>
                 </div>
                 {p.user_id === roomHostId && (
-                  <span className="text-[9px] bg-amber-500 text-black px-2 py-1 rounded-md font-black tracking-tighter">
+                  <span className="text-[9px] bg-amber-500 text-black px-2 py-1 rounded-md font-black">
                     HÔTE
                   </span>
                 )}
               </div>
             ))}
-            {activePlayers.length === 0 && (
-              <p className="text-center text-slate-600 py-4 italic text-sm">
-                En attente de connexion...
-              </p>
-            )}
           </div>
         </div>
 
         {myId === roomHostId ? (
           <button
             onClick={startGame}
-            className="mt-10 bg-green-600 px-16 py-5 rounded-2xl font-black text-xl hover:bg-green-500 shadow-2xl shadow-green-900/40 transition-all hover:-translate-y-1 active:translate-y-0"
+            className="mt-10 bg-green-600 px-16 py-5 rounded-2xl font-black text-xl hover:bg-green-500 shadow-2xl shadow-green-900/40"
           >
             LANCER LA PARTIE
           </button>
         ) : (
-          <div className="mt-10 flex flex-col items-center gap-2">
-            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-amber-500"></div>
-            <p className="text-slate-500 text-xs font-bold italic">
-              L'hôte prépare les cartes...
-            </p>
-          </div>
+          <p className="mt-10 text-slate-500 text-xs font-bold italic animate-pulse">
+            L'hôte prépare les cartes...
+          </p>
         )}
       </div>
     );
@@ -455,13 +467,11 @@ function App() {
 
   if (view === "game") {
     const me = players.find((p) => p.user_id === myId);
-    // Filtrer les joueurs actifs pour le tour de jeu
     const activePlayers = players.filter((p) => onlineIds.includes(p.user_id));
     const isMyTurn = activePlayers[currentPlayerIndex]?.user_id === myId;
 
     return (
       <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center">
-        {/* UI du haut corrigée */}
         <div className="w-full max-w-4xl flex justify-between items-center bg-slate-800 p-4 rounded-2xl border-b-4 border-slate-700 mb-6 shadow-2xl">
           <span className="font-black text-amber-500 tracking-tighter">
             CITADELLES
@@ -486,16 +496,16 @@ function App() {
 
         {gameStatus === "drafting" ? (
           <div className="w-full max-w-4xl text-center">
-            <h2 className="text-2xl font-black mb-8 tracking-widest text-slate-400">
-              PHASE DE RECRUTEMENT
+            <h2 className="text-2xl font-black mb-8 tracking-widest text-slate-400 uppercase">
+              Phase de Recrutement
             </h2>
             {isMyTurn ? (
               <div className="animate-fade-in">
                 <div
-                  className={`inline-block px-8 py-4 rounded-2xl border-2 mb-10 font-black uppercase tracking-widest transition-all ${draftSubStep === "discard" ? "bg-red-500/10 border-red-500 text-red-500 shadow-[0_0_20px_rgba(239,68,68,0.2)]" : "bg-green-500/10 border-green-500 text-green-500 shadow-[0_0_20px_rgba(34,197,94,0.2)]"}`}
+                  className={`inline-block px-8 py-4 rounded-2xl border-2 mb-10 font-black uppercase tracking-widest transition-all ${draftSubStep === "discard" ? "bg-red-500/10 border-red-500 text-red-500" : "bg-green-500/10 border-green-500 text-green-500"}`}
                 >
                   {draftSubStep === "discard"
-                    ? "🔥 Défausser une carte (SECRET)"
+                    ? "🔥 Défausser une carte"
                     : "👑 Choisir ton personnage"}
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
@@ -517,13 +527,6 @@ function App() {
               </div>
             ) : (
               <div className="bg-slate-800/30 p-16 rounded-[3rem] border border-slate-700/50 backdrop-blur-sm">
-                <div className="mb-4 flex justify-center">
-                  <div className="flex gap-1">
-                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-bounce"></div>
-                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-bounce [animation-delay:0.2s]"></div>
-                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-bounce [animation-delay:0.4s]"></div>
-                  </div>
-                </div>
                 <p className="text-xl text-slate-500 font-bold uppercase tracking-widest">
                   C'est au tour de{" "}
                   <span className="text-white underline decoration-amber-500 underline-offset-8">
@@ -534,12 +537,12 @@ function App() {
             )}
           </div>
         ) : (
-          <div className="text-center mt-20 animate-pulse">
+          <div className="text-center mt-20">
             <h1 className="text-6xl font-black text-green-500 mb-6 italic tracking-tighter underline">
               LE JEU COMMENCE !
             </h1>
-            <p className="text-slate-400 font-bold uppercase tracking-[0.5em]">
-              Préparez vos cités...
+            <p className="text-slate-400 font-bold uppercase tracking-[0.5em] animate-pulse">
+              L'appel des personnages arrive...
             </p>
           </div>
         )}
