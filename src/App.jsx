@@ -26,10 +26,17 @@ function App() {
   const [buildsCount, setBuildsCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  // --- ÉTATS MAGICIEN ---
-  const [magicState, setMagicState] = useState("menu"); // 'menu', 'player', 'deck'
-  const [magicSelectedCards, setMagicSelectedCards] = useState([]); // IDs des cartes à défausser
+  // --- ÉTATS POUVOIRS ---
+  const [magicState, setMagicState] = useState("menu");
+  const [magicSelectedCards, setMagicSelectedCards] = useState([]);
   const [magicUsed, setMagicUsed] = useState(false);
+
+  const [warState, setWarState] = useState(null);
+  const [warTargetPlayer, setWarTargetPlayer] = useState(null);
+  const [warUsed, setWarUsed] = useState(false); // Limite 1 destruction
+
+  // --- SNAPSHOT POUR IMPOTS ---
+  const startTurnCityRef = useRef([]); // Mémorise la ville au début du tour
 
   const myIdRef = useRef(null);
   const roomIdRef = useRef(null);
@@ -123,19 +130,21 @@ function App() {
       .insert([{ code, host_id: uid, king_player_id: uid, status: "waiting" }])
       .select()
       .single();
-    await supabase.from("players").insert([
-      {
-        room_id: room.id,
-        user_id: uid,
-        pseudo,
-        joined_at: new Date(),
-        gold: 2,
-        hand: [],
-        city: [],
-        characters: [],
-        played_characters: [],
-      },
-    ]);
+    await supabase
+      .from("players")
+      .insert([
+        {
+          room_id: room.id,
+          user_id: uid,
+          pseudo,
+          joined_at: new Date(),
+          gold: 2,
+          hand: [],
+          city: [],
+          characters: [],
+          played_characters: [],
+        },
+      ]);
     localStorage.setItem("citadelles_room_id", room.id);
     localStorage.setItem("citadelles_player_id", uid);
     setMyId(uid);
@@ -164,19 +173,21 @@ function App() {
         .eq("user_id", uid)
         .single();
       if (!ex)
-        await supabase.from("players").insert([
-          {
-            room_id: room.id,
-            user_id: uid,
-            pseudo,
-            joined_at: new Date(),
-            gold: 2,
-            hand: [],
-            city: [],
-            characters: [],
-            played_characters: [],
-          },
-        ]);
+        await supabase
+          .from("players")
+          .insert([
+            {
+              room_id: room.id,
+              user_id: uid,
+              pseudo,
+              joined_at: new Date(),
+              gold: 2,
+              hand: [],
+              city: [],
+              characters: [],
+              played_characters: [],
+            },
+          ]);
       localStorage.setItem("citadelles_room_id", room.id);
       localStorage.setItem("citadelles_player_id", uid);
       setMyId(uid);
@@ -312,7 +323,11 @@ function App() {
   const collectTax = async () => {
     const me = players.find((p) => p.user_id === myId);
     const myChar = CHARACTERS.find((c) => c.id === currentTurnNumber);
-    const matching = (me?.city || []).filter(
+
+    // CORRECTION : On ne compte que les quartiers qui étaient là AU DÉBUT du tour
+    const eligibleCityIds = startTurnCityRef.current;
+
+    const matching = eligibleCityIds.filter(
       (id) => DISTRICTS.find((dist) => dist.id === id).color === myChar.color,
     );
     if (matching.length > 0)
@@ -324,11 +339,9 @@ function App() {
     setTaxCollected(true);
   };
 
-  // --- ACTIONS MAGICIEN ---
   const swapWithPlayer = async (targetUserId) => {
     const me = players.find((p) => p.user_id === myId);
     const target = players.find((p) => p.user_id === targetUserId);
-    // Echange des mains
     await supabase
       .from("players")
       .update({ hand: target.hand || [] })
@@ -353,30 +366,21 @@ function App() {
     let stack = [...(r.district_stack || [])].map((i) =>
       typeof i === "object" ? i.id : i,
     );
-
-    // On pioche X cartes
     const drawn = stack.splice(0, magicSelectedCards.length);
-
-    // On met les cartes défaussées SOUS la pioche
     const newStack = [...stack, ...magicSelectedCards];
-
     const me = players.find((p) => p.user_id === myId);
-    // Nouvelle main = Main actuelle - cartes défaussées + cartes piochées
     const keptCards = (me.hand || []).filter(
       (id) => !magicSelectedCards.includes(id),
     );
-    const finalHand = [...keptCards, ...drawn];
-
     await supabase
       .from("rooms")
       .update({ district_stack: newStack })
       .eq("id", roomId);
     await supabase
       .from("players")
-      .update({ hand: finalHand })
+      .update({ hand: [...keptCards, ...drawn] })
       .eq("user_id", myId)
       .eq("room_id", roomId);
-
     setMagicUsed(true);
     setMagicSelectedCards([]);
     setMagicState("menu");
@@ -388,9 +392,35 @@ function App() {
     else setMagicSelectedCards((prev) => [...prev, cid]);
   };
 
+  const destroyDistrict = async (districtId, cost) => {
+    const me = players.find((p) => p.user_id === myId);
+    if (me.gold < cost) return alert("Pas assez d'or !");
+    await supabase
+      .from("players")
+      .update({ gold: me.gold - cost })
+      .eq("user_id", myId)
+      .eq("room_id", roomId);
+    const targetCity = warTargetPlayer.city.filter((id) => id !== districtId);
+    await supabase
+      .from("players")
+      .update({ city: targetCity })
+      .eq("user_id", warTargetPlayer.user_id)
+      .eq("room_id", roomId);
+
+    // CORRECTION : Limite à 1 usage
+    setWarUsed(true);
+    setWarState(null);
+    setWarTargetPlayer(null);
+  };
+
   useEffect(() => {
     const applyStartPowers = async () => {
       const me = players.find((p) => p.user_id === myId);
+      if (!me) return;
+
+      // SNAPSHOT DE LA CITÉ pour les impôts
+      startTurnCityRef.current = me.city || [];
+
       const isMyTurn =
         (me?.characters || []).includes(currentTurnNumber) &&
         !(me?.played_characters || []).includes(currentTurnNumber);
@@ -434,12 +464,16 @@ function App() {
       }
     };
     if (gameStatus === "playing") applyStartPowers();
+
+    // RESET des états de tour
     setTaxCollected(false);
     setBuildsCount(0);
-    // Reset Magicien
     setMagicState("menu");
     setMagicUsed(false);
     setMagicSelectedCards([]);
+    setWarState(null);
+    setWarTargetPlayer(null);
+    setWarUsed(false); // Reset Condottiere
   }, [currentTurnNumber]);
 
   const useAssassinPower = async (targetId) => {
@@ -782,10 +816,11 @@ function App() {
     const killedCharName = CHARACTERS.find((c) => c.id === killedId)?.name;
     const kingPseudo = players.find((p) => p.user_id === kingPlayerId)?.pseudo;
 
+    // IMPOTS CALCULÉS SUR LE SNAPSHOT DE DÉBUT DE TOUR
     const canTax =
       isMyCharTurn &&
       !taxCollected &&
-      (me?.city || []).some(
+      startTurnCityRef.current.some(
         (id) => DISTRICTS.find((d) => d.id === id).color === activeChar.color,
       );
 
@@ -948,7 +983,7 @@ function App() {
                       </button>
                     )}
 
-                    {/* MAGICIEN (NOUVEAU) */}
+                    {/* MAGICIEN */}
                     {currentTurnNumber === 3 && !magicUsed && (
                       <div className="p-6 bg-purple-900/20 rounded-3xl border border-purple-500/50 mb-6 animate-fade-in">
                         <h3 className="text-purple-400 font-black text-sm uppercase mb-4 tracking-widest">
@@ -958,13 +993,13 @@ function App() {
                           <div className="flex gap-4 justify-center">
                             <button
                               onClick={() => setMagicState("player")}
-                              className="bg-purple-600 hover:bg-purple-500 px-6 py-3 rounded-xl font-bold text-xs uppercase shadow-lg transition-transform hover:-translate-y-1"
+                              className="bg-purple-600 hover:bg-purple-500 px-6 py-3 rounded-xl font-bold text-xs uppercase"
                             >
                               Échanger avec un Joueur
                             </button>
                             <button
                               onClick={() => setMagicState("deck")}
-                              className="bg-slate-700 hover:bg-slate-600 px-6 py-3 rounded-xl font-bold text-xs uppercase shadow-lg transition-transform hover:-translate-y-1"
+                              className="bg-slate-700 hover:bg-slate-600 px-6 py-3 rounded-xl font-bold text-xs uppercase"
                             >
                               Échanger avec la Pioche
                             </button>
@@ -984,13 +1019,13 @@ function App() {
                                     onClick={() => swapWithPlayer(p.user_id)}
                                     className="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded-lg font-bold text-xs uppercase"
                                   >
-                                    {p.pseudo} ({p.hand?.length || 0} cartes)
+                                    {p.pseudo} ({p.hand?.length || 0})
                                   </button>
                                 ))}
                             </div>
                             <button
                               onClick={() => setMagicState("menu")}
-                              className="text-slate-500 text-[10px] underline hover:text-white"
+                              className="text-slate-500 text-[10px] underline"
                             >
                               Retour
                             </button>
@@ -1034,6 +1069,86 @@ function App() {
                             </div>
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* CONDOTTIERE (CORRIGÉ : LIMITE 1 FOIS + CACHÉ SI DÉJÀ FAIT) */}
+                    {currentTurnNumber === 8 && !warState && !warUsed && (
+                      <button
+                        onClick={() => setWarState("selecting_player")}
+                        className="w-full bg-red-800 border border-red-600 hover:bg-red-700 py-3 rounded-xl font-black text-xs uppercase mb-4 animate-pulse"
+                      >
+                        💣 DÉTRUIRE UN QUARTIER
+                      </button>
+                    )}
+
+                    {warState === "selecting_player" && (
+                      <div className="p-4 bg-red-900/20 rounded-2xl border-2 border-red-600 mb-6 animate-fade-in">
+                        <p className="text-red-500 font-black text-xs uppercase mb-4">
+                          CIBLE À DÉTRUIRE :
+                        </p>
+                        <div className="flex flex-wrap gap-2 justify-center">
+                          {players
+                            .filter((p) => p.user_id !== myId)
+                            .map((p) => {
+                              const isBishop = (p.characters || []).includes(5);
+                              return (
+                                <button
+                                  key={p.id}
+                                  disabled={isBishop}
+                                  onClick={() => {
+                                    setWarTargetPlayer(p);
+                                    setWarState("selecting_district");
+                                  }}
+                                  className={`px-4 py-2 rounded-lg font-bold text-xs uppercase ${isBishop ? "bg-slate-800 text-slate-600 cursor-not-allowed border border-slate-700" : "bg-red-600 hover:bg-red-500 text-white"}`}
+                                >
+                                  {p.pseudo} {isBishop && " (ÉVÊQUE)"}
+                                </button>
+                              );
+                            })}
+                        </div>
+                        <button
+                          onClick={() => setWarState(null)}
+                          className="mt-4 text-slate-500 text-[10px] underline"
+                        >
+                          Annuler
+                        </button>
+                      </div>
+                    )}
+
+                    {warState === "selecting_district" && warTargetPlayer && (
+                      <div className="p-4 bg-red-900/20 rounded-2xl border-2 border-red-600 mb-6 animate-fade-in">
+                        <p className="text-red-500 font-black text-xs uppercase mb-2">
+                          QUARTIER DE {warTargetPlayer.pseudo} :
+                        </p>
+                        <div className="flex flex-wrap gap-2 justify-center">
+                          {warTargetPlayer.city.map((id) => {
+                            const c = DISTRICTS.find((d) => d.id === id);
+                            const cost = Math.max(0, c.cost - 1);
+                            const canAfford = me.gold >= cost;
+                            return (
+                              <button
+                                key={id}
+                                disabled={!canAfford}
+                                onClick={() => destroyDistrict(id, cost)}
+                                className={`p-3 rounded-xl border text-center ${canAfford ? "bg-red-600 border-red-400 hover:scale-105" : "bg-slate-800 border-slate-700 opacity-50 grayscale"}`}
+                              >
+                                <span className="block font-black text-xs">
+                                  {c.name}
+                                </span>
+                                <span className="text-[10px] block mt-1">
+                                  Coût destruction: {cost} PO
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <button
+                          onClick={() => setWarState("selecting_player")}
+                          className="mt-4 text-slate-500 text-[10px] underline"
+                        >
+                          Retour
+                        </button>
                       </div>
                     )}
 
