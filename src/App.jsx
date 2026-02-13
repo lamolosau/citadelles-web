@@ -12,7 +12,7 @@ function App() {
   const [myId, setMyId] = useState(null);
   const [roomHostId, setRoomHostId] = useState(null);
   const [kingPlayerId, setKingPlayerId] = useState(null);
-  const [kingChanged, setKingChanged] = useState(false); // Flag pour l'annonce
+  const [kingChanged, setKingChanged] = useState(false);
   const [gameStatus, setGameStatus] = useState("waiting");
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
   const [draftPile, setDraftPile] = useState([]);
@@ -25,6 +25,11 @@ function App() {
   const [taxCollected, setTaxCollected] = useState(false);
   const [buildsCount, setBuildsCount] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  // --- ÉTATS MAGICIEN ---
+  const [magicState, setMagicState] = useState("menu"); // 'menu', 'player', 'deck'
+  const [magicSelectedCards, setMagicSelectedCards] = useState([]); // IDs des cartes à défausser
+  const [magicUsed, setMagicUsed] = useState(false);
 
   const myIdRef = useRef(null);
   const roomIdRef = useRef(null);
@@ -118,21 +123,19 @@ function App() {
       .insert([{ code, host_id: uid, king_player_id: uid, status: "waiting" }])
       .select()
       .single();
-    await supabase
-      .from("players")
-      .insert([
-        {
-          room_id: room.id,
-          user_id: uid,
-          pseudo,
-          joined_at: new Date(),
-          gold: 2,
-          hand: [],
-          city: [],
-          characters: [],
-          played_characters: [],
-        },
-      ]);
+    await supabase.from("players").insert([
+      {
+        room_id: room.id,
+        user_id: uid,
+        pseudo,
+        joined_at: new Date(),
+        gold: 2,
+        hand: [],
+        city: [],
+        characters: [],
+        played_characters: [],
+      },
+    ]);
     localStorage.setItem("citadelles_room_id", room.id);
     localStorage.setItem("citadelles_player_id", uid);
     setMyId(uid);
@@ -150,7 +153,7 @@ function App() {
     const uid = await getUserId();
     const { data: room } = await supabase
       .from("rooms")
-      .select("*")
+      .select()
       .eq("code", roomCode)
       .single();
     if (room) {
@@ -161,21 +164,19 @@ function App() {
         .eq("user_id", uid)
         .single();
       if (!ex)
-        await supabase
-          .from("players")
-          .insert([
-            {
-              room_id: room.id,
-              user_id: uid,
-              pseudo,
-              joined_at: new Date(),
-              gold: 2,
-              hand: [],
-              city: [],
-              characters: [],
-              played_characters: [],
-            },
-          ]);
+        await supabase.from("players").insert([
+          {
+            room_id: room.id,
+            user_id: uid,
+            pseudo,
+            joined_at: new Date(),
+            gold: 2,
+            hand: [],
+            city: [],
+            characters: [],
+            played_characters: [],
+          },
+        ]);
       localStorage.setItem("citadelles_room_id", room.id);
       localStorage.setItem("citadelles_player_id", uid);
       setMyId(uid);
@@ -308,8 +309,6 @@ function App() {
     }
   };
 
-  // --- ACTIONS DE TOUR ---
-
   const collectTax = async () => {
     const me = players.find((p) => p.user_id === myId);
     const myChar = CHARACTERS.find((c) => c.id === currentTurnNumber);
@@ -323,6 +322,70 @@ function App() {
         .eq("user_id", myId)
         .eq("room_id", roomId);
     setTaxCollected(true);
+  };
+
+  // --- ACTIONS MAGICIEN ---
+  const swapWithPlayer = async (targetUserId) => {
+    const me = players.find((p) => p.user_id === myId);
+    const target = players.find((p) => p.user_id === targetUserId);
+    // Echange des mains
+    await supabase
+      .from("players")
+      .update({ hand: target.hand || [] })
+      .eq("user_id", myId)
+      .eq("room_id", roomId);
+    await supabase
+      .from("players")
+      .update({ hand: me.hand || [] })
+      .eq("user_id", targetUserId)
+      .eq("room_id", roomId);
+    setMagicUsed(true);
+    setMagicState("menu");
+  };
+
+  const swapWithDeck = async () => {
+    if (magicSelectedCards.length === 0) return;
+    const { data: r } = await supabase
+      .from("rooms")
+      .select("district_stack")
+      .eq("id", roomId)
+      .single();
+    let stack = [...(r.district_stack || [])].map((i) =>
+      typeof i === "object" ? i.id : i,
+    );
+
+    // On pioche X cartes
+    const drawn = stack.splice(0, magicSelectedCards.length);
+
+    // On met les cartes défaussées SOUS la pioche
+    const newStack = [...stack, ...magicSelectedCards];
+
+    const me = players.find((p) => p.user_id === myId);
+    // Nouvelle main = Main actuelle - cartes défaussées + cartes piochées
+    const keptCards = (me.hand || []).filter(
+      (id) => !magicSelectedCards.includes(id),
+    );
+    const finalHand = [...keptCards, ...drawn];
+
+    await supabase
+      .from("rooms")
+      .update({ district_stack: newStack })
+      .eq("id", roomId);
+    await supabase
+      .from("players")
+      .update({ hand: finalHand })
+      .eq("user_id", myId)
+      .eq("room_id", roomId);
+
+    setMagicUsed(true);
+    setMagicSelectedCards([]);
+    setMagicState("menu");
+  };
+
+  const toggleMagicCard = (cid) => {
+    if (magicSelectedCards.includes(cid))
+      setMagicSelectedCards((prev) => prev.filter((id) => id !== cid));
+    else setMagicSelectedCards((prev) => [...prev, cid]);
   };
 
   useEffect(() => {
@@ -356,25 +419,27 @@ function App() {
             .update({ district_stack: s })
             .eq("id", roomId);
         }
-        // LOGIQUE ROI : Mise à jour intelligente
         if (currentTurnNumber === 4) {
-          if (myId !== kingPlayerId) {
+          if (myId !== kingPlayerId)
             await supabase
               .from("rooms")
               .update({ king_player_id: myId, king_changed: true })
               .eq("id", roomId);
-          } else {
+          else
             await supabase
               .from("rooms")
               .update({ king_changed: false })
               .eq("id", roomId);
-          }
         }
       }
     };
     if (gameStatus === "playing") applyStartPowers();
     setTaxCollected(false);
     setBuildsCount(0);
+    // Reset Magicien
+    setMagicState("menu");
+    setMagicUsed(false);
+    setMagicSelectedCards([]);
   }, [currentTurnNumber]);
 
   const useAssassinPower = async (targetId) => {
@@ -566,7 +631,6 @@ function App() {
     return () => supabase.removeChannel(channel);
   }, [roomId, myId]);
 
-  // Vol
   useEffect(() => {
     const me = players.find((p) => p.user_id === myId);
     if (
@@ -648,7 +712,7 @@ function App() {
       <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center relative">
         <button
           onClick={leaveRoom}
-          className="absolute top-6 right-6 bg-red-500/10 text-red-500 border border-red-500/50 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+          className="absolute top-6 right-6 bg-red-500/10 text-red-500 border border-red-500/50 px-4 py-2 rounded-xl text-[10px] font-black uppercase"
         >
           Quitter X
         </button>
@@ -673,7 +737,7 @@ function App() {
                 className="bg-slate-900/50 p-4 rounded-2xl flex justify-between items-center border border-slate-800"
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 bg-green-500 rounded-full shadow-[0_0_8px_rgba(34,197,94,0.6)]"></div>
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                   <span className="font-bold text-slate-200">{p.pseudo}</span>
                 </div>
                 <div className="flex gap-2">
@@ -727,13 +791,11 @@ function App() {
 
     return (
       <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center w-full">
-        {/* BANDEAU COURONNE : Persistant si kingChanged est true pendant le tour 4 */}
         {currentTurnNumber === 4 && kingChanged && owner && (
           <div className="w-full max-w-4xl bg-yellow-600/90 text-yellow-100 text-[10px] font-black uppercase tracking-[0.4em] py-3 px-4 rounded-2xl mb-4 text-center border-2 border-yellow-500/50 animate-pulse shadow-2xl">
             👑 CHANGEMENT DE SOUVERAIN : {owner.pseudo} prend la Couronne !
           </div>
         )}
-
         {killedId && (
           <div className="w-full max-w-4xl bg-red-600 text-white text-[10px] font-black uppercase tracking-[0.3em] py-2 px-4 rounded-full mb-4 text-center animate-pulse">
             L'assassin a frappé : Le {killedCharName} est mort !
@@ -749,11 +811,9 @@ function App() {
               <span className="text-xl animate-bounce">👑</span>
             )}
           </div>
-
-          {/* LE SCEAU ROYAL (Design Central Amélioré) */}
           <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center bg-yellow-900/10 px-6 py-2 rounded-2xl border border-yellow-500/20 shadow-inner">
             <span className="text-[7px] text-yellow-500/50 font-black uppercase tracking-[0.2em] mb-0.5">
-              Détenteur de la Couronne
+              Souverain
             </span>
             <div className="flex items-center gap-2">
               <span className="text-xs">👑</span>
@@ -762,7 +822,6 @@ function App() {
               </span>
             </div>
           </div>
-
           <div className="flex gap-6">
             <div className="flex flex-col items-end">
               <span className="text-[10px] text-slate-500 font-black uppercase">
@@ -789,7 +848,7 @@ function App() {
             {activeOn[currentPlayerIndex]?.user_id === myId ? (
               <div className="animate-fade-in">
                 <div
-                  className={`inline-block px-8 py-4 rounded-2xl border-2 mb-10 font-black uppercase tracking-widest transition-all ${draftSubStep === "discard" ? "bg-red-500/10 border-red-500 text-red-500 shadow-[0_0_20px_rgba(239,68,68,0.2)]" : "bg-green-500/10 border-green-500 text-green-500 shadow-[0_0_20px_rgba(34,197,94,0.2)]"}`}
+                  className={`inline-block px-8 py-4 rounded-2xl border-2 mb-10 font-black uppercase tracking-widest transition-all ${draftSubStep === "discard" ? "bg-red-500/10 border-red-500 text-red-500" : "bg-green-500/10 border-green-500 text-green-500"}`}
                 >
                   {draftSubStep === "discard"
                     ? "🔥 Défausser une carte (SECRET)"
@@ -889,6 +948,96 @@ function App() {
                       </button>
                     )}
 
+                    {/* MAGICIEN (NOUVEAU) */}
+                    {currentTurnNumber === 3 && !magicUsed && (
+                      <div className="p-6 bg-purple-900/20 rounded-3xl border border-purple-500/50 mb-6 animate-fade-in">
+                        <h3 className="text-purple-400 font-black text-sm uppercase mb-4 tracking-widest">
+                          Grimoire de Magie
+                        </h3>
+                        {magicState === "menu" && (
+                          <div className="flex gap-4 justify-center">
+                            <button
+                              onClick={() => setMagicState("player")}
+                              className="bg-purple-600 hover:bg-purple-500 px-6 py-3 rounded-xl font-bold text-xs uppercase shadow-lg transition-transform hover:-translate-y-1"
+                            >
+                              Échanger avec un Joueur
+                            </button>
+                            <button
+                              onClick={() => setMagicState("deck")}
+                              className="bg-slate-700 hover:bg-slate-600 px-6 py-3 rounded-xl font-bold text-xs uppercase shadow-lg transition-transform hover:-translate-y-1"
+                            >
+                              Échanger avec la Pioche
+                            </button>
+                          </div>
+                        )}
+                        {magicState === "player" && (
+                          <div className="space-y-4">
+                            <p className="text-slate-400 text-xs italic">
+                              Choisis ta victime :
+                            </p>
+                            <div className="flex flex-wrap gap-2 justify-center">
+                              {players
+                                .filter((p) => p.user_id !== myId)
+                                .map((p) => (
+                                  <button
+                                    key={p.id}
+                                    onClick={() => swapWithPlayer(p.user_id)}
+                                    className="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded-lg font-bold text-xs uppercase"
+                                  >
+                                    {p.pseudo} ({p.hand?.length || 0} cartes)
+                                  </button>
+                                ))}
+                            </div>
+                            <button
+                              onClick={() => setMagicState("menu")}
+                              className="text-slate-500 text-[10px] underline hover:text-white"
+                            >
+                              Retour
+                            </button>
+                          </div>
+                        )}
+                        {magicState === "deck" && (
+                          <div className="space-y-4">
+                            <p className="text-slate-400 text-xs italic">
+                              Sélectionne les cartes à défausser (
+                              {magicSelectedCards.length}) :
+                            </p>
+                            <div className="flex flex-wrap gap-2 justify-center">
+                              {(me?.hand || []).map((id) => {
+                                const c = DISTRICTS.find((d) => d.id === id);
+                                const isSelected =
+                                  magicSelectedCards.includes(id);
+                                return (
+                                  <button
+                                    key={id}
+                                    onClick={() => toggleMagicCard(id)}
+                                    className={`px-3 py-2 rounded-lg text-[10px] font-bold border-2 transition-all ${isSelected ? "bg-purple-600 border-white scale-105" : "bg-slate-800 border-slate-600 opacity-60"}`}
+                                  >
+                                    {c?.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <div className="flex gap-2 justify-center mt-2">
+                              <button
+                                onClick={swapWithDeck}
+                                className="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-xl font-bold text-xs"
+                              >
+                                CONFIRMER
+                              </button>
+                              <button
+                                onClick={() => setMagicState("menu")}
+                                className="bg-slate-700 px-4 py-2 rounded-xl text-xs"
+                              >
+                                Annuler
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* POUVOIR ASSASSIN */}
                     {currentTurnNumber === 1 && !killedId && (
                       <div className="p-4 bg-red-900/20 rounded-2xl border border-red-500/50 mb-4">
                         <p className="text-red-500 font-black mb-4 text-xs uppercase italic">
@@ -912,6 +1061,7 @@ function App() {
                       </div>
                     )}
 
+                    {/* POUVOIR VOLEUR */}
                     {currentTurnNumber === 2 && !robbedId && (
                       <div className="p-4 bg-amber-900/20 rounded-2xl border border-amber-500/50 mb-4">
                         <p className="text-amber-500 font-black mb-4 text-xs uppercase italic">
