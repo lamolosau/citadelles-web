@@ -13,6 +13,7 @@ function App() {
   const [roomHostId, setRoomHostId] = useState(null);
   const [kingPlayerId, setKingPlayerId] = useState(null);
   const [kingChanged, setKingChanged] = useState(false);
+  const [firstBuilderId, setFirstBuilderId] = useState(null);
   const [gameStatus, setGameStatus] = useState("waiting");
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
   const [draftPile, setDraftPile] = useState([]);
@@ -24,20 +25,24 @@ function App() {
   const [robbedId, setRobbedId] = useState(null);
   const [taxCollected, setTaxCollected] = useState(false);
   const [buildsCount, setBuildsCount] = useState(0);
-  const [loading, setLoading] = useState(true);
 
-  // --- ÉTATS POUVOIRS ---
+  // --- ÉTATS MERVEILLES & POUVOIRS ---
+  const [laboUsed, setLaboUsed] = useState(false);
+  const [forgeUsed, setForgeUsed] = useState(false);
   const [magicState, setMagicState] = useState("menu");
   const [magicSelectedCards, setMagicSelectedCards] = useState([]);
   const [magicUsed, setMagicUsed] = useState(false);
 
   const [warState, setWarState] = useState(null);
   const [warTargetPlayer, setWarTargetPlayer] = useState(null);
-  const [warUsed, setWarUsed] = useState(false); // Limite 1 destruction
+  const [warUsed, setWarUsed] = useState(false);
 
-  // --- SNAPSHOT POUR IMPOTS ---
-  const startTurnCityRef = useRef([]); // Mémorise la ville au début du tour
+  // --- AUTO-DELETE TIMER & HOST STABILITY ---
+  const [timeLeft, setTimeLeft] = useState(60);
+  const hostTransferTimeoutRef = useRef(null); // REFERENCE POUR LE CHRONO DU HOST
 
+  const [loading, setLoading] = useState(true);
+  const startTurnCityRef = useRef([]);
   const myIdRef = useRef(null);
   const roomIdRef = useRef(null);
   const playersRef = useRef([]);
@@ -73,19 +78,19 @@ function App() {
       const sRoomId = localStorage.getItem("citadelles_room_id");
       const sPlayerId = localStorage.getItem("citadelles_player_id");
       if (sRoomId && sPlayerId) {
-        const { data: room } = await supabase
+        const { data: room, error: roomError } = await supabase
           .from("rooms")
           .select("*")
           .eq("id", sRoomId)
           .single();
-        if (room) {
-          const { data: p } = await supabase
+        if (room && !roomError) {
+          const { data: p, error: pError } = await supabase
             .from("players")
             .select("*")
             .eq("user_id", sPlayerId)
             .eq("room_id", sRoomId)
             .single();
-          if (p) {
+          if (p && !pError) {
             setMyId(sPlayerId);
             setRoomId(sRoomId);
             setRoomCode(room.code);
@@ -97,7 +102,14 @@ function App() {
             setKilledId(room.killed_char_id);
             setRobbedId(room.robbed_char_id);
             setKingChanged(room.king_changed);
-            setView(room.status === "waiting" ? "lobby" : "game");
+            setFirstBuilderId(room.first_builder_id);
+            setView(
+              room.status === "waiting"
+                ? "lobby"
+                : room.status === "finished"
+                  ? "finished"
+                  : "game",
+            );
           }
         }
       }
@@ -112,6 +124,30 @@ function App() {
     setRoomId(null);
     setMyId(null);
   };
+
+  const deleteRoomAndQuit = async () => {
+    if (roomId) {
+      await supabase.from("players").delete().eq("room_id", roomId);
+      await supabase.from("rooms").delete().eq("id", roomId);
+    }
+    clearSession();
+  };
+
+  useEffect(() => {
+    let interval = null;
+    if (view === "finished") {
+      interval = setInterval(() => {
+        setTimeLeft((prev) => {
+          if (prev <= 1) {
+            deleteRoomAndQuit();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [view]);
 
   const getUserId = async () => {
     const { data } = await supabase.auth.getSession();
@@ -222,11 +258,10 @@ function App() {
   };
 
   const startGame = async () => {
-    const active = players.filter((p) => onlineIds.includes(p.user_id));
-    if (active.length < 2) return alert("2 joueurs min.");
+    if (players.length < 2) return alert("2 joueurs min.");
     setLoading(true);
     let d = shuffle([...DISTRICTS]);
-    for (const p of active) {
+    for (const p of players) {
       const hand = d.splice(0, 4).map((c) => c.id);
       await supabase
         .from("players")
@@ -250,10 +285,9 @@ function App() {
       .from("players")
       .update({ characters: [], played_characters: [] })
       .eq("room_id", roomId);
-    const activeOn = playersRef.current.filter((p) =>
-      onlineIds.includes(p.user_id),
+    let startIndex = playersRef.current.findIndex(
+      (p) => p.user_id === kingPlayerId,
     );
-    let startIndex = activeOn.findIndex((p) => p.user_id === kingPlayerId);
     if (startIndex === -1) startIndex = 0;
     await supabase
       .from("rooms")
@@ -273,10 +307,10 @@ function App() {
   };
 
   const pickCharacter = async (cid) => {
-    const active = players.filter((p) => onlineIds.includes(p.user_id));
-    const me = active.find((p) => p.user_id === myId);
+    const me = players.find((p) => p.user_id === myId);
+    if ((me?.characters || []).includes(cid)) return; // Anti-doublon
     const pile = draftPile.filter((x) => x.id !== cid);
-    if (active.length === 2) {
+    if (players.length === 2) {
       if (draftSubStep === "pick") {
         const newC = [...(me.characters || []), cid];
         await supabase
@@ -323,20 +357,87 @@ function App() {
   const collectTax = async () => {
     const me = players.find((p) => p.user_id === myId);
     const myChar = CHARACTERS.find((c) => c.id === currentTurnNumber);
-
-    // CORRECTION : On ne compte que les quartiers qui étaient là AU DÉBUT du tour
     const eligibleCityIds = startTurnCityRef.current;
 
-    const matching = eligibleCityIds.filter(
-      (id) => DISTRICTS.find((dist) => dist.id === id).color === myChar.color,
+    const hasSchoolOfMagic = eligibleCityIds.some(
+      (id) => DISTRICTS.find((d) => d.id === id).name === "École de Magie",
     );
-    if (matching.length > 0)
+    const validRoles = [4, 5, 6, 8];
+    const matching = eligibleCityIds.filter((id) => {
+      const d = DISTRICTS.find((dist) => dist.id === id);
+      return d.color === myChar.color;
+    });
+
+    let bonus = matching.length;
+    if (hasSchoolOfMagic && validRoles.includes(myChar.id)) bonus += 1;
+
+    if (bonus > 0)
       await supabase
         .from("players")
-        .update({ gold: (me.gold || 0) + matching.length })
+        .update({ gold: (me.gold || 0) + bonus })
         .eq("user_id", myId)
         .eq("room_id", roomId);
     setTaxCollected(true);
+  };
+
+  const useLaboratoire = async () => {
+    if (magicSelectedCards.length !== 1)
+      return alert("Sélectionne exactement 1 carte.");
+    const me = players.find((p) => p.user_id === myId);
+    const cardId = magicSelectedCards[0];
+    const newHand = me.hand.filter((id) => id !== cardId);
+    await supabase
+      .from("players")
+      .update({ gold: (me.gold || 0) + 1, hand: newHand })
+      .eq("user_id", myId)
+      .eq("room_id", roomId);
+    setLaboUsed(true);
+    setMagicSelectedCards([]);
+  };
+
+  const useForge = async () => {
+    const me = players.find((p) => p.user_id === myId);
+    if (me.gold < 3) return alert("Pas assez d'or.");
+    const { data: r } = await supabase
+      .from("rooms")
+      .select("district_stack")
+      .eq("id", roomId)
+      .single();
+    let stack = [...(r.district_stack || [])].map((i) =>
+      typeof i === "object" ? i.id : i,
+    );
+    const drawn = stack.splice(0, 3);
+    await supabase
+      .from("rooms")
+      .update({ district_stack: stack })
+      .eq("id", roomId);
+    await supabase
+      .from("players")
+      .update({ gold: me.gold - 3, hand: [...me.hand, ...drawn] })
+      .eq("user_id", myId)
+      .eq("room_id", roomId);
+    setForgeUsed(true);
+  };
+
+  const destroyDistrict = async (districtId, cost) => {
+    const me = players.find((p) => p.user_id === myId);
+    const card = DISTRICTS.find((d) => d.id === districtId);
+    if (card.name === "Donjon") return;
+    if (me.gold < cost) return alert("Pas assez d'or !");
+    await supabase
+      .from("players")
+      .update({ gold: me.gold - cost })
+      .eq("user_id", myId)
+      .eq("room_id", roomId);
+    const targetCity = warTargetPlayer.city.filter((id) => id !== districtId);
+    await supabase
+      .from("players")
+      .update({ city: targetCity })
+      .eq("user_id", warTargetPlayer.user_id)
+      .eq("room_id", roomId);
+    setWarUsed(true);
+    setWarState(null);
+    setWarTargetPlayer(null);
   };
 
   const swapWithPlayer = async (targetUserId) => {
@@ -392,38 +493,20 @@ function App() {
     else setMagicSelectedCards((prev) => [...prev, cid]);
   };
 
-  const destroyDistrict = async (districtId, cost) => {
-    const me = players.find((p) => p.user_id === myId);
-    if (me.gold < cost) return alert("Pas assez d'or !");
-    await supabase
-      .from("players")
-      .update({ gold: me.gold - cost })
-      .eq("user_id", myId)
-      .eq("room_id", roomId);
-    const targetCity = warTargetPlayer.city.filter((id) => id !== districtId);
-    await supabase
-      .from("players")
-      .update({ city: targetCity })
-      .eq("user_id", warTargetPlayer.user_id)
-      .eq("room_id", roomId);
-
-    // CORRECTION : Limite à 1 usage
-    setWarUsed(true);
-    setWarState(null);
-    setWarTargetPlayer(null);
-  };
-
   useEffect(() => {
     const applyStartPowers = async () => {
       const me = players.find((p) => p.user_id === myId);
       if (!me) return;
-
-      // SNAPSHOT DE LA CITÉ pour les impôts
       startTurnCityRef.current = me.city || [];
-
       const isMyTurn =
         (me?.characters || []).includes(currentTurnNumber) &&
         !(me?.played_characters || []).includes(currentTurnNumber);
+
+      if (isMyTurn) {
+        setTurnPhase("resource");
+        setDrawOptions([]);
+      }
+
       if (isMyTurn && turnPhase === "resource") {
         if (currentTurnNumber === 6)
           await supabase
@@ -465,7 +548,7 @@ function App() {
     };
     if (gameStatus === "playing") applyStartPowers();
 
-    // RESET des états de tour
+    // RESET TOUR
     setTaxCollected(false);
     setBuildsCount(0);
     setMagicState("menu");
@@ -473,7 +556,9 @@ function App() {
     setMagicSelectedCards([]);
     setWarState(null);
     setWarTargetPlayer(null);
-    setWarUsed(false); // Reset Condottiere
+    setWarUsed(false);
+    setLaboUsed(false);
+    setForgeUsed(false);
   }, [currentTurnNumber]);
 
   const useAssassinPower = async (targetId) => {
@@ -502,6 +587,7 @@ function App() {
   };
 
   const startDraw = async () => {
+    const me = players.find((p) => p.user_id === myId);
     const { data: r } = await supabase
       .from("rooms")
       .select("district_stack")
@@ -511,14 +597,53 @@ function App() {
       typeof i === "object" ? i.id : i,
     );
     if (s.length < 2) s = shuffle([...DISTRICTS]).map((c) => c.id);
-    const opts = s.splice(0, 2);
-    setDrawOptions(opts);
-    await supabase.from("rooms").update({ district_stack: s }).eq("id", roomId);
-    setTurnPhase("drawing");
+
+    const hasLibrary = (me?.city || []).some(
+      (id) => DISTRICTS.find((d) => d.id === id).name === "Bibliothèque",
+    );
+    const hasObservatory = (me?.city || []).some(
+      (id) => DISTRICTS.find((d) => d.id === id).name === "Observatoire",
+    );
+
+    if (hasLibrary) {
+      const cardsToKeep = s.splice(0, 2);
+      await supabase
+        .from("rooms")
+        .update({ district_stack: s })
+        .eq("id", roomId);
+      await supabase
+        .from("players")
+        .update({ hand: [...(me.hand || []), ...cardsToKeep] })
+        .eq("user_id", myId)
+        .eq("room_id", roomId);
+      setTurnPhase("build");
+    } else {
+      const drawCount = hasObservatory ? 3 : 2;
+      const opts = s.splice(0, drawCount);
+      setDrawOptions(opts);
+      await supabase
+        .from("rooms")
+        .update({ district_stack: s })
+        .eq("id", roomId);
+      setTurnPhase("drawing");
+    }
   };
 
   const pickDrawnCard = async (cid) => {
     const me = players.find((p) => p.user_id === myId);
+    const unpicked = drawOptions.filter((id) => id !== cid);
+    if (unpicked.length > 0) {
+      const { data: r } = await supabase
+        .from("rooms")
+        .select("district_stack")
+        .eq("id", roomId)
+        .single();
+      let currentStack = r.district_stack || [];
+      await supabase
+        .from("rooms")
+        .update({ district_stack: [...currentStack, ...unpicked] })
+        .eq("id", roomId);
+    }
     await supabase
       .from("players")
       .update({ hand: [...(me.hand || []), cid] })
@@ -532,16 +657,22 @@ function App() {
     const me = players.find((p) => p.user_id === myId);
     const card = DISTRICTS.find((d) => d.id === cid);
     if (!card || (me.gold || 0) < card.cost) return;
+    const newCity = [...(me.city || []), cid];
     await supabase
       .from("players")
       .update({
-        city: [...(me.city || []), cid],
+        city: newCity,
         hand: (me.hand || []).filter((id) => id !== cid),
         gold: me.gold - card.cost,
       })
       .eq("user_id", myId)
       .eq("room_id", roomId);
     setBuildsCount((prev) => prev + 1);
+    if (newCity.length >= 8 && !firstBuilderId)
+      await supabase
+        .from("rooms")
+        .update({ first_builder_id: myId })
+        .eq("id", roomId);
     const max = currentTurnNumber === 7 ? 3 : 1;
     if (buildsCount + 1 >= max) setTurnPhase("end");
   };
@@ -559,10 +690,25 @@ function App() {
     if (next > 8) {
       const { data: r } = await supabase
         .from("rooms")
-        .select("district_stack")
+        .select("*")
         .eq("id", roomId)
         .single();
-      await prepareDraft(r.district_stack || []);
+      const { data: allPlayers } = await supabase
+        .from("players")
+        .select("*")
+        .eq("room_id", roomId);
+      const isGameFinished = allPlayers.some((p) => (p.city || []).length >= 8);
+      if (isGameFinished)
+        await supabase
+          .from("rooms")
+          .update({ status: "finished" })
+          .eq("id", roomId);
+      else {
+        let stack = (r.district_stack || []).map((i) =>
+          typeof i === "object" ? i.id : i,
+        );
+        await prepareDraft(stack);
+      }
     } else
       await supabase
         .from("rooms")
@@ -576,10 +722,25 @@ function App() {
     if (next > 8) {
       const { data: r } = await supabase
         .from("rooms")
-        .select("district_stack")
+        .select("*")
         .eq("id", roomId)
         .single();
-      await prepareDraft(r.district_stack || []);
+      const { data: allPlayers } = await supabase
+        .from("players")
+        .select("*")
+        .eq("room_id", roomId);
+      const isGameFinished = allPlayers.some((p) => (p.city || []).length >= 8);
+      if (isGameFinished)
+        await supabase
+          .from("rooms")
+          .update({ status: "finished" })
+          .eq("id", roomId);
+      else {
+        let stack = (r.district_stack || []).map((i) =>
+          typeof i === "object" ? i.id : i,
+        );
+        await prepareDraft(stack);
+      }
     } else
       await supabase
         .from("rooms")
@@ -587,6 +748,31 @@ function App() {
         .eq("id", roomId);
   };
 
+  const calculateScore = (p) => {
+    let score = 0;
+    const cityCards = (p.city || [])
+      .map((id) => DISTRICTS.find((d) => d.id === id))
+      .filter(Boolean);
+    score += cityCards.reduce((sum, c) => sum + c.cost, 0);
+    const bonusCards = ["Université", "Dracoport"];
+    const bonusCount = cityCards.filter((c) =>
+      bonusCards.includes(c.name),
+    ).length;
+    score += bonusCount * 2;
+    const hasCour = cityCards.some((c) => c.name === "Cour des Miracles");
+    const colors = new Set(cityCards.map((c) => c.color));
+    let hasFiveColors = false;
+    if (colors.size >= 5) hasFiveColors = true;
+    else if (hasCour && colors.size >= 4) hasFiveColors = true;
+    if (hasFiveColors) score += 3;
+    if (p.city.length >= 8) {
+      if (p.user_id === firstBuilderId) score += 4;
+      else score += 2;
+    }
+    return score;
+  };
+
+  // --- LOGIQUE PRESENCE ROBUSTE (CORRECTIF V41) ---
   useEffect(() => {
     if (!roomId || !myId) return;
     const refresh = async () => {
@@ -612,7 +798,9 @@ function App() {
         setRobbedId(r.robbed_char_id);
         setKingPlayerId(r.king_player_id);
         setKingChanged(r.king_changed);
-        if (r.status !== "waiting") setView("game");
+        setFirstBuilderId(r.first_builder_id);
+        if (r.status === "finished") setView("finished");
+        else if (r.status !== "waiting") setView("game");
         else setView("lobby");
       }
     };
@@ -642,27 +830,54 @@ function App() {
         refresh,
       )
       .on("presence", { event: "sync" }, () => {
-        const cOn = Object.keys(channel.presenceState());
+        const state = channel.presenceState();
+        const cOn = Object.keys(state);
         setOnlineIds(cOn);
-        const active = playersRef.current.filter((p) =>
-          cOn.includes(p.user_id),
-        );
-        if (active.length > 0 && !cOn.includes(roomHostIdRef.current)) {
-          setTimeout(() => {
-            if (active[0].user_id === myIdRef.current)
-              supabase
-                .from("rooms")
-                .update({ host_id: myIdRef.current })
-                .eq("id", roomIdRef.current)
-                .then();
-          }, 5000);
+
+        // CORRECTIF V41 : GESTION INTELLIGENTE DU TRANSFERT D'HÔTE
+        const currentHostId = roomHostIdRef.current;
+        const isHostOnline = cOn.includes(currentHostId);
+
+        if (isHostOnline) {
+          // Si l'hôte revient, on annule tout putsch prévu !
+          if (hostTransferTimeoutRef.current) {
+            clearTimeout(hostTransferTimeoutRef.current);
+            hostTransferTimeoutRef.current = null;
+          }
+        } else {
+          // Si l'hôte part, on attend 15s avant de le détrôner
+          if (!hostTransferTimeoutRef.current) {
+            hostTransferTimeoutRef.current = setTimeout(async () => {
+              const active = playersRef.current.filter((p) =>
+                onlineIds.includes(p.user_id),
+              );
+              // Si c'est toujours moi le survivant le plus ancien, je prends le lead
+              const me = playersRef.current.find(
+                (p) => p.user_id === myIdRef.current,
+              );
+              if (
+                me &&
+                active.length > 0 &&
+                active[0].user_id === myIdRef.current
+              ) {
+                await supabase
+                  .from("rooms")
+                  .update({ host_id: myIdRef.current })
+                  .eq("id", roomIdRef.current);
+              }
+            }, 15000);
+          }
         }
       })
       .subscribe(async (s) => {
         if (s === "SUBSCRIBED")
           await channel.track({ online_at: new Date().toISOString() });
       });
-    return () => supabase.removeChannel(channel);
+    return () => {
+      supabase.removeChannel(channel);
+      if (hostTransferTimeoutRef.current)
+        clearTimeout(hostTransferTimeoutRef.current);
+    };
   }, [roomId, myId]);
 
   useEffect(() => {
@@ -692,6 +907,63 @@ function App() {
       }
     }
   }, [currentTurnNumber, robbedId]);
+
+  if (view === "finished") {
+    const sortedPlayers = [...players].sort(
+      (a, b) => calculateScore(b) - calculateScore(a),
+    );
+    return (
+      <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center justify-center">
+        <h1 className="text-6xl font-black text-amber-500 mb-2 tracking-tighter">
+          VICTOIRE !
+        </h1>
+        <p className="text-slate-400 mb-4 uppercase tracking-[0.5em] font-bold">
+          Le royaume a un nouveau maître
+        </p>
+        <p className="text-red-500 mb-8 text-xs font-bold animate-pulse">
+          Fermeture du salon dans {timeLeft}s
+        </p>
+        <div className="w-full max-w-2xl bg-slate-800 rounded-3xl p-8 border border-slate-700 shadow-2xl">
+          <div className="space-y-4">
+            {sortedPlayers.map((p, index) => (
+              <div
+                key={p.id}
+                className={`flex items-center justify-between p-6 rounded-2xl border-2 ${index === 0 ? "bg-amber-900/20 border-amber-500" : "bg-slate-900 border-slate-700"}`}
+              >
+                <div className="flex items-center gap-6">
+                  <span
+                    className={`text-4xl font-black ${index === 0 ? "text-amber-500" : "text-slate-600"}`}
+                  >
+                    #{index + 1}
+                  </span>
+                  <div>
+                    <p className="text-2xl font-bold">{p.pseudo}</p>
+                    <p className="text-xs text-slate-500 uppercase font-bold tracking-wider">
+                      {p.city?.length} Quartiers construits
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-4xl font-black text-white">
+                    {calculateScore(p)}
+                  </p>
+                  <p className="text-[10px] text-slate-500 uppercase font-bold">
+                    Points
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <button
+          onClick={deleteRoomAndQuit}
+          className="mt-12 bg-slate-700 px-8 py-4 rounded-xl font-black hover:bg-slate-600 uppercase tracking-widest"
+        >
+          Retour au Menu
+        </button>
+      </div>
+    );
+  }
 
   if (loading)
     return (
@@ -741,7 +1013,10 @@ function App() {
     );
 
   if (view === "lobby") {
-    const active = players.filter((p) => onlineIds.includes(p.user_id));
+    const active =
+      onlineIds.length > 0
+        ? players.filter((p) => onlineIds.includes(p.user_id))
+        : players;
     return (
       <div className="min-h-screen bg-slate-900 text-white p-6 flex flex-col items-center relative">
         <button
@@ -762,32 +1037,37 @@ function App() {
         </div>
         <div className="w-full max-w-md mt-12 bg-slate-800 rounded-3xl p-6 border border-slate-700 shadow-xl">
           <h2 className="text-[10px] font-black text-slate-500 mb-6 uppercase tracking-widest">
-            Garde rapprochée ({active.length})
+            Garde rapprochée ({players.length})
           </h2>
           <div className="space-y-3">
-            {active.map((p) => (
-              <div
-                key={p.id}
-                className="bg-slate-900/50 p-4 rounded-2xl flex justify-between items-center border border-slate-800"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span className="font-bold text-slate-200">{p.pseudo}</span>
+            {players.map((p) => {
+              const isOnline = onlineIds.includes(p.user_id);
+              return (
+                <div
+                  key={p.id}
+                  className="bg-slate-900/50 p-4 rounded-2xl flex justify-between items-center border border-slate-800"
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`w-2 h-2 rounded-full ${isOnline || onlineIds.length === 0 ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-slate-500"}`}
+                    ></div>
+                    <span className="font-bold text-slate-200">{p.pseudo}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    {p.user_id === kingPlayerId && (
+                      <span className="text-[9px] bg-yellow-500 text-black px-2 py-1 rounded-md font-black">
+                        👑 COURONNE
+                      </span>
+                    )}
+                    {p.user_id === roomHostId && (
+                      <span className="text-[9px] bg-amber-500 text-black px-2 py-1 rounded-md font-black">
+                        HÔTE
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  {p.user_id === kingPlayerId && (
-                    <span className="text-[9px] bg-yellow-500 text-black px-2 py-1 rounded-md font-black">
-                      👑 COURONNE
-                    </span>
-                  )}
-                  {p.user_id === roomHostId && (
-                    <span className="text-[9px] bg-amber-500 text-black px-2 py-1 rounded-md font-black">
-                      HÔTE
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
         {myId === roomHostId && (
@@ -816,13 +1096,25 @@ function App() {
     const killedCharName = CHARACTERS.find((c) => c.id === killedId)?.name;
     const kingPseudo = players.find((p) => p.user_id === kingPlayerId)?.pseudo;
 
-    // IMPOTS CALCULÉS SUR LE SNAPSHOT DE DÉBUT DE TOUR
+    const eligibleCityIds = startTurnCityRef.current;
+    const hasSchool = eligibleCityIds.some(
+      (id) => DISTRICTS.find((d) => d.id === id).name === "École de Magie",
+    );
+    const validSchoolRoles = [4, 5, 6, 8];
     const canTax =
       isMyCharTurn &&
       !taxCollected &&
-      startTurnCityRef.current.some(
+      (eligibleCityIds.some(
         (id) => DISTRICTS.find((d) => d.id === id).color === activeChar.color,
-      );
+      ) ||
+        (hasSchool && validSchoolRoles.includes(activeChar.id)));
+
+    const hasLaboratoire = (me?.city || []).some(
+      (id) => DISTRICTS.find((d) => d.id === id).name === "Laboratoire",
+    );
+    const hasForge = (me?.city || []).some(
+      (id) => DISTRICTS.find((d) => d.id === id).name === "Forge",
+    );
 
     return (
       <div className="min-h-screen bg-slate-900 text-white p-4 flex flex-col items-center w-full">
@@ -880,7 +1172,7 @@ function App() {
             <h2 className="text-2xl font-black mb-8 tracking-widest text-slate-400 uppercase">
               Phase de Recrutement
             </h2>
-            {activeOn[currentPlayerIndex]?.user_id === myId ? (
+            {players[currentPlayerIndex]?.user_id === myId ? (
               <div className="animate-fade-in">
                 <div
                   className={`inline-block px-8 py-4 rounded-2xl border-2 mb-10 font-black uppercase tracking-widest transition-all ${draftSubStep === "discard" ? "bg-red-500/10 border-red-500 text-red-500" : "bg-green-500/10 border-green-500 text-green-500"}`}
@@ -913,7 +1205,7 @@ function App() {
                 <p className="text-xl text-slate-500 font-bold uppercase tracking-widest">
                   Tour de{" "}
                   <span className="text-white underline decoration-amber-500 underline-offset-8">
-                    {activeOn[currentPlayerIndex]?.pseudo}
+                    {players[currentPlayerIndex]?.pseudo}
                   </span>
                 </p>
               </div>
@@ -921,22 +1213,55 @@ function App() {
           </div>
         ) : (
           <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-slate-800/50 p-6 rounded-3xl border border-slate-700">
-              <h3 className="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest text-center">
-                Ma Cité
-              </h3>
-              <div className="grid grid-cols-1 gap-2">
-                {(me?.city || []).map((id) => {
-                  const c = DISTRICTS.find((d) => d.id === id);
-                  return (
-                    <div
-                      key={id}
-                      className={`p-3 rounded-xl text-xs font-bold border ${c.color === "blue" ? "bg-blue-900/40 border-blue-500 text-blue-300" : c.color === "red" ? "bg-red-900/40 border-red-500 text-red-300" : c.color === "green" ? "bg-green-900/40 border-green-500 text-green-300" : c.color === "yellow" ? "bg-yellow-900/40 border-yellow-500 text-yellow-300" : "bg-purple-900/40 border-purple-500 text-purple-300"}`}
-                    >
-                      {c.name}
-                    </div>
-                  );
-                })}
+            <div className="flex flex-col gap-6">
+              <div className="bg-slate-800/50 p-4 rounded-3xl border border-slate-700">
+                <h3 className="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest text-center">
+                  Mes Personnages
+                </h3>
+                <div className="grid grid-cols-1 gap-2">
+                  {[...new Set(me?.characters || [])].map((charId) => {
+                    const char = CHARACTERS.find((c) => c.id === charId);
+                    const hasPlayed = (me?.played_characters || []).includes(
+                      charId,
+                    );
+                    return (
+                      <div
+                        key={charId}
+                        className={`flex items-center gap-3 p-3 rounded-xl border ${hasPlayed ? "bg-slate-900 border-slate-800 opacity-50 grayscale" : "bg-slate-800 border-slate-600"}`}
+                      >
+                        <div
+                          className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs border-2 ${getCharStyle(charId)}`}
+                        >
+                          {charId}
+                        </div>
+                        <span
+                          className={`font-bold text-xs ${hasPlayed ? "text-slate-500 line-through" : "text-white"}`}
+                        >
+                          {char.name}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="bg-slate-800/50 p-6 rounded-3xl border border-slate-700">
+                <h3 className="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest text-center">
+                  Ma Cité ({me?.city?.length || 0})
+                </h3>
+                <div className="grid grid-cols-1 gap-2">
+                  {(me?.city || []).map((id) => {
+                    const c = DISTRICTS.find((d) => d.id === id);
+                    return (
+                      <div
+                        key={id}
+                        className={`p-3 rounded-xl text-xs font-bold border ${c.color === "blue" ? "bg-blue-900/40 border-blue-500 text-blue-300" : c.color === "red" ? "bg-red-900/40 border-red-500 text-red-300" : c.color === "green" ? "bg-green-900/40 border-green-500 text-green-300" : c.color === "yellow" ? "bg-yellow-900/40 border-yellow-500 text-yellow-300" : "bg-purple-900/40 border-purple-500 text-purple-300"}`}
+                      >
+                        {c.name}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -983,28 +1308,42 @@ function App() {
                       </button>
                     )}
 
-                    {/* MAGICIEN */}
-                    {currentTurnNumber === 3 && !magicUsed && (
+                    {(currentTurnNumber === 3 && !magicUsed) ||
+                    (hasLaboratoire && !laboUsed) ? (
                       <div className="p-6 bg-purple-900/20 rounded-3xl border border-purple-500/50 mb-6 animate-fade-in">
                         <h3 className="text-purple-400 font-black text-sm uppercase mb-4 tracking-widest">
-                          Grimoire de Magie
+                          {currentTurnNumber === 3
+                            ? "Grimoire & Merveilles"
+                            : "Merveilles"}
                         </h3>
-                        {magicState === "menu" && (
-                          <div className="flex gap-4 justify-center">
+                        <div className="flex flex-wrap gap-4 justify-center mb-4">
+                          {currentTurnNumber === 3 &&
+                            !magicUsed &&
+                            magicState === "menu" && (
+                              <>
+                                <button
+                                  onClick={() => setMagicState("player")}
+                                  className="bg-purple-600 hover:bg-purple-500 px-6 py-3 rounded-xl font-bold text-xs uppercase"
+                                >
+                                  Échanger avec un Joueur
+                                </button>
+                                <button
+                                  onClick={() => setMagicState("deck")}
+                                  className="bg-slate-700 hover:bg-slate-600 px-6 py-3 rounded-xl font-bold text-xs uppercase"
+                                >
+                                  Échanger avec la Pioche
+                                </button>
+                              </>
+                            )}
+                          {hasLaboratoire && !laboUsed && (
                             <button
-                              onClick={() => setMagicState("player")}
-                              className="bg-purple-600 hover:bg-purple-500 px-6 py-3 rounded-xl font-bold text-xs uppercase"
+                              onClick={() => setMagicState("labo")}
+                              className="bg-indigo-600 hover:bg-indigo-500 px-6 py-3 rounded-xl font-bold text-xs uppercase border border-indigo-400"
                             >
-                              Échanger avec un Joueur
+                              ⚗️ Utiliser le Laboratoire
                             </button>
-                            <button
-                              onClick={() => setMagicState("deck")}
-                              className="bg-slate-700 hover:bg-slate-600 px-6 py-3 rounded-xl font-bold text-xs uppercase"
-                            >
-                              Échanger avec la Pioche
-                            </button>
-                          </div>
-                        )}
+                          )}
+                        </div>
                         {magicState === "player" && (
                           <div className="space-y-4">
                             <p className="text-slate-400 text-xs italic">
@@ -1031,11 +1370,12 @@ function App() {
                             </button>
                           </div>
                         )}
-                        {magicState === "deck" && (
+                        {(magicState === "deck" || magicState === "labo") && (
                           <div className="space-y-4">
                             <p className="text-slate-400 text-xs italic">
-                              Sélectionne les cartes à défausser (
-                              {magicSelectedCards.length}) :
+                              {magicState === "labo"
+                                ? "Sélectionne 1 carte à défausser pour 1 Or :"
+                                : `Sélectionne les cartes à défausser (${magicSelectedCards.length}) :`}
                             </p>
                             <div className="flex flex-wrap gap-2 justify-center">
                               {(me?.hand || []).map((id) => {
@@ -1054,12 +1394,21 @@ function App() {
                               })}
                             </div>
                             <div className="flex gap-2 justify-center mt-2">
-                              <button
-                                onClick={swapWithDeck}
-                                className="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-xl font-bold text-xs"
-                              >
-                                CONFIRMER
-                              </button>
+                              {magicState === "labo" ? (
+                                <button
+                                  onClick={useLaboratoire}
+                                  className="bg-indigo-600 hover:bg-indigo-500 px-6 py-2 rounded-xl font-bold text-xs"
+                                >
+                                  TRANSFORMER EN OR
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={swapWithDeck}
+                                  className="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-xl font-bold text-xs"
+                                >
+                                  CONFIRMER
+                                </button>
+                              )}
                               <button
                                 onClick={() => setMagicState("menu")}
                                 className="bg-slate-700 px-4 py-2 rounded-xl text-xs"
@@ -1070,9 +1419,17 @@ function App() {
                           </div>
                         )}
                       </div>
+                    ) : null}
+
+                    {hasForge && !forgeUsed && (
+                      <button
+                        onClick={useForge}
+                        className="w-full bg-slate-700 border border-slate-500 hover:bg-slate-600 py-3 rounded-xl font-black text-xs uppercase mb-4"
+                      >
+                        ⚒️ Utiliser la Forge (3 Or → 3 Cartes)
+                      </button>
                     )}
 
-                    {/* CONDOTTIERE (CORRIGÉ : LIMITE 1 FOIS + CACHÉ SI DÉJÀ FAIT) */}
                     {currentTurnNumber === 8 && !warState && !warUsed && (
                       <button
                         onClick={() => setWarState("selecting_player")}
@@ -1081,7 +1438,6 @@ function App() {
                         💣 DÉTRUIRE UN QUARTIER
                       </button>
                     )}
-
                     {warState === "selecting_player" && (
                       <div className="p-4 bg-red-900/20 rounded-2xl border-2 border-red-600 mb-6 animate-fade-in">
                         <p className="text-red-500 font-black text-xs uppercase mb-4">
@@ -1115,7 +1471,6 @@ function App() {
                         </button>
                       </div>
                     )}
-
                     {warState === "selecting_district" && warTargetPlayer && (
                       <div className="p-4 bg-red-900/20 rounded-2xl border-2 border-red-600 mb-6 animate-fade-in">
                         <p className="text-red-500 font-black text-xs uppercase mb-2">
@@ -1124,20 +1479,23 @@ function App() {
                         <div className="flex flex-wrap gap-2 justify-center">
                           {warTargetPlayer.city.map((id) => {
                             const c = DISTRICTS.find((d) => d.id === id);
+                            const isDungeon = c.name === "Donjon";
                             const cost = Math.max(0, c.cost - 1);
                             const canAfford = me.gold >= cost;
                             return (
                               <button
                                 key={id}
-                                disabled={!canAfford}
+                                disabled={!canAfford || isDungeon}
                                 onClick={() => destroyDistrict(id, cost)}
-                                className={`p-3 rounded-xl border text-center ${canAfford ? "bg-red-600 border-red-400 hover:scale-105" : "bg-slate-800 border-slate-700 opacity-50 grayscale"}`}
+                                className={`p-3 rounded-xl border text-center ${isDungeon ? "bg-slate-900 border-slate-700 text-slate-600 cursor-not-allowed" : canAfford ? "bg-red-600 border-red-400 hover:scale-105" : "bg-slate-800 border-slate-700 opacity-50 grayscale"}`}
                               >
                                 <span className="block font-black text-xs">
                                   {c.name}
                                 </span>
                                 <span className="text-[10px] block mt-1">
-                                  Coût destruction: {cost} PO
+                                  {isDungeon
+                                    ? "INDESTRUCTIBLE"
+                                    : `Coût: ${cost} PO`}
                                 </span>
                               </button>
                             );
@@ -1152,7 +1510,6 @@ function App() {
                       </div>
                     )}
 
-                    {/* POUVOIR ASSASSIN */}
                     {currentTurnNumber === 1 && !killedId && (
                       <div className="p-4 bg-red-900/20 rounded-2xl border border-red-500/50 mb-4">
                         <p className="text-red-500 font-black mb-4 text-xs uppercase italic">
@@ -1175,8 +1532,6 @@ function App() {
                         </div>
                       </div>
                     )}
-
-                    {/* POUVOIR VOLEUR */}
                     {currentTurnNumber === 2 && !robbedId && (
                       <div className="p-4 bg-amber-900/20 rounded-2xl border border-amber-500/50 mb-4">
                         <p className="text-amber-500 font-black mb-4 text-xs uppercase italic">
