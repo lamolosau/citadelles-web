@@ -17,6 +17,7 @@ function App() {
   const [gameStatus, setGameStatus] = useState("waiting");
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
   const [draftPile, setDraftPile] = useState([]);
+  const [faceUpChars, setFaceUpChars] = useState([]);
   const [draftSubStep, setDraftSubStep] = useState("pick");
   const [currentTurnNumber, setCurrentTurnNumber] = useState(1);
   const [turnPhase, setTurnPhase] = useState("resource");
@@ -37,9 +38,9 @@ function App() {
   const [warTargetPlayer, setWarTargetPlayer] = useState(null);
   const [warUsed, setWarUsed] = useState(false);
 
-  // --- AUTO-DELETE TIMER & HOST STABILITY ---
+  // --- AUTO-DELETE TIMER & HOST ---
   const [timeLeft, setTimeLeft] = useState(60);
-  const hostTransferTimeoutRef = useRef(null); // REFERENCE POUR LE CHRONO DU HOST
+  const hostTransferTimeoutRef = useRef(null);
 
   const [loading, setLoading] = useState(true);
   const startTurnCityRef = useRef([]);
@@ -47,13 +48,15 @@ function App() {
   const roomIdRef = useRef(null);
   const playersRef = useRef([]);
   const roomHostIdRef = useRef(null);
+  const gameStatusRef = useRef("waiting");
 
   useEffect(() => {
     myIdRef.current = myId;
     roomIdRef.current = roomId;
     playersRef.current = players;
     roomHostIdRef.current = roomHostId;
-  }, [myId, roomId, players, roomHostId]);
+    gameStatusRef.current = gameStatus;
+  }, [myId, roomId, players, roomHostId, gameStatus]);
 
   const getCharStyle = (charId) => {
     const char = CHARACTERS.find((c) => c.id === charId);
@@ -103,6 +106,7 @@ function App() {
             setRobbedId(room.robbed_char_id);
             setKingChanged(room.king_changed);
             setFirstBuilderId(room.first_builder_id);
+            setFaceUpChars(room.face_up_chars || []);
             setView(
               room.status === "waiting"
                 ? "lobby"
@@ -278,9 +282,16 @@ function App() {
     setLoading(false);
   };
 
+  // --- DRAFT MULTIJOUEUR ---
   const prepareDraft = async (stack) => {
+    const playerCount = playersRef.current.length;
     let c = shuffle([...CHARACTERS]);
     const fd = c.pop();
+    let fuCount = 0;
+    if (playerCount === 4) fuCount = 2;
+    else if (playerCount === 5) fuCount = 1;
+    const fu = c.splice(0, fuCount);
+
     await supabase
       .from("players")
       .update({ characters: [], played_characters: [] })
@@ -289,6 +300,7 @@ function App() {
       (p) => p.user_id === kingPlayerId,
     );
     if (startIndex === -1) startIndex = 0;
+
     await supabase
       .from("rooms")
       .update({
@@ -296,6 +308,7 @@ function App() {
         district_stack: stack,
         draft_pile: c,
         face_down_char: fd.id,
+        face_up_chars: fu,
         current_player_index: startIndex,
         current_character_turn: 1,
         draft_sub_step: "pick",
@@ -308,9 +321,12 @@ function App() {
 
   const pickCharacter = async (cid) => {
     const me = players.find((p) => p.user_id === myId);
-    if ((me?.characters || []).includes(cid)) return; // Anti-doublon
-    const pile = draftPile.filter((x) => x.id !== cid);
-    if (players.length === 2) {
+    const playerCount = players.length;
+
+    if ((me?.characters || []).includes(cid)) return;
+
+    if (playerCount === 2) {
+      const pile = draftPile.filter((x) => x.id !== cid);
       if (draftSubStep === "pick") {
         const newC = [...(me.characters || []), cid];
         await supabase
@@ -351,6 +367,58 @@ function App() {
           })
           .eq("id", roomId);
       }
+    } else {
+      // --- LOGIQUE MULTIJOUEUR (3-7 Joueurs) ---
+      const newC = [...(me.characters || []), cid];
+      await supabase
+        .from("players")
+        .update({ characters: newC })
+        .eq("user_id", myId)
+        .eq("room_id", roomId);
+
+      const pile = draftPile.filter((x) => x.id !== cid);
+      const nextIndex = (currentPlayerIndex + 1) % playerCount;
+
+      // CORRECTIF V44 : Règle des 3 joueurs (2 cartes chacun)
+      // À 3 joueurs, on s'arrête quand la pile n'a plus qu'1 carte (la dernière est écartée)
+      if (playerCount === 3) {
+        if (pile.length === 1) {
+          await supabase
+            .from("rooms")
+            .update({
+              status: "playing",
+              draft_pile: [],
+              current_character_turn: 1,
+            })
+            .eq("id", roomId);
+        } else {
+          await supabase
+            .from("rooms")
+            .update({ draft_pile: pile, current_player_index: nextIndex })
+            .eq("id", roomId);
+        }
+      }
+      // 4 à 7 joueurs : 1 carte chacun
+      else {
+        const startPlayerIndex =
+          players.findIndex((p) => p.user_id === kingPlayerId) !== -1
+            ? players.findIndex((p) => p.user_id === kingPlayerId)
+            : 0;
+        if (nextIndex === startPlayerIndex)
+          await supabase
+            .from("rooms")
+            .update({
+              status: "playing",
+              draft_pile: [],
+              current_character_turn: 1,
+            })
+            .eq("id", roomId);
+        else
+          await supabase
+            .from("rooms")
+            .update({ draft_pile: pile, current_player_index: nextIndex })
+            .eq("id", roomId);
+      }
     }
   };
 
@@ -358,7 +426,6 @@ function App() {
     const me = players.find((p) => p.user_id === myId);
     const myChar = CHARACTERS.find((c) => c.id === currentTurnNumber);
     const eligibleCityIds = startTurnCityRef.current;
-
     const hasSchoolOfMagic = eligibleCityIds.some(
       (id) => DISTRICTS.find((d) => d.id === id).name === "École de Magie",
     );
@@ -367,10 +434,8 @@ function App() {
       const d = DISTRICTS.find((dist) => dist.id === id);
       return d.color === myChar.color;
     });
-
     let bonus = matching.length;
     if (hasSchoolOfMagic && validRoles.includes(myChar.id)) bonus += 1;
-
     if (bonus > 0)
       await supabase
         .from("players")
@@ -772,7 +837,6 @@ function App() {
     return score;
   };
 
-  // --- LOGIQUE PRESENCE ROBUSTE (CORRECTIF V41) ---
   useEffect(() => {
     if (!roomId || !myId) return;
     const refresh = async () => {
@@ -799,9 +863,20 @@ function App() {
         setKingPlayerId(r.king_player_id);
         setKingChanged(r.king_changed);
         setFirstBuilderId(r.first_builder_id);
+        setFaceUpChars(r.face_up_chars || []);
         if (r.status === "finished") setView("finished");
         else if (r.status !== "waiting") setView("game");
         else setView("lobby");
+
+        const hostExistsInDB = ps.some((p) => p.user_id === r.host_id);
+        if (!hostExistsInDB && ps.length > 0) {
+          if (ps[0].user_id === myId) {
+            await supabase
+              .from("rooms")
+              .update({ host_id: myId })
+              .eq("id", roomId);
+          }
+        }
       }
     };
     refresh();
@@ -834,24 +909,21 @@ function App() {
         const cOn = Object.keys(state);
         setOnlineIds(cOn);
 
-        // CORRECTIF V41 : GESTION INTELLIGENTE DU TRANSFERT D'HÔTE
         const currentHostId = roomHostIdRef.current;
         const isHostOnline = cOn.includes(currentHostId);
 
         if (isHostOnline) {
-          // Si l'hôte revient, on annule tout putsch prévu !
           if (hostTransferTimeoutRef.current) {
             clearTimeout(hostTransferTimeoutRef.current);
             hostTransferTimeoutRef.current = null;
           }
         } else {
-          // Si l'hôte part, on attend 15s avant de le détrôner
           if (!hostTransferTimeoutRef.current) {
+            const delay = gameStatusRef.current === "waiting" ? 3000 : 15000;
             hostTransferTimeoutRef.current = setTimeout(async () => {
               const active = playersRef.current.filter((p) =>
-                onlineIds.includes(p.user_id),
+                cOn.includes(p.user_id),
               );
-              // Si c'est toujours moi le survivant le plus ancien, je prends le lead
               const me = playersRef.current.find(
                 (p) => p.user_id === myIdRef.current,
               );
@@ -865,7 +937,7 @@ function App() {
                   .update({ host_id: myIdRef.current })
                   .eq("id", roomIdRef.current);
               }
-            }, 15000);
+            }, delay);
           }
         }
       })
@@ -1084,7 +1156,6 @@ function App() {
 
   if (view === "game") {
     const me = players.find((p) => p.user_id === myId);
-    const activeOn = players.filter((p) => onlineIds.includes(p.user_id));
     const activeChar = CHARACTERS.find((c) => c.id === currentTurnNumber);
     const isMyCharTurn =
       (me?.characters || []).includes(currentTurnNumber) &&
@@ -1172,6 +1243,23 @@ function App() {
             <h2 className="text-2xl font-black mb-8 tracking-widest text-slate-400 uppercase">
               Phase de Recrutement
             </h2>
+            {faceUpChars.length > 0 && (
+              <div className="mb-8">
+                <p className="text-xs text-slate-500 uppercase tracking-widest mb-2">
+                  Cartes Écartées (Face Visible)
+                </p>
+                <div className="flex justify-center gap-4">
+                  {faceUpChars.map((c) => (
+                    <div
+                      key={c.id}
+                      className="opacity-50 grayscale border-2 border-slate-600 rounded-xl p-4 bg-slate-800"
+                    >
+                      <span className="font-bold text-xs">{c.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {players[currentPlayerIndex]?.user_id === myId ? (
               <div className="animate-fade-in">
                 <div
@@ -1219,25 +1307,39 @@ function App() {
                   Mes Personnages
                 </h3>
                 <div className="grid grid-cols-1 gap-2">
+                  {/* CORRECTIF V44 : UI ASSASSIN & VISUELS */}
                   {[...new Set(me?.characters || [])].map((charId) => {
                     const char = CHARACTERS.find((c) => c.id === charId);
                     const hasPlayed = (me?.played_characters || []).includes(
                       charId,
                     );
+                    const isDead = killedId === charId;
+
+                    let borderClass = "bg-slate-800 border-slate-600";
+                    let textClass = "text-white";
+
+                    if (isDead) {
+                      borderClass = "bg-red-900/20 border-red-900";
+                      textClass =
+                        "text-red-500 line-through decoration-red-500";
+                    } else if (hasPlayed) {
+                      borderClass =
+                        "bg-slate-900 border-slate-800 opacity-50 grayscale";
+                      textClass = "text-slate-500 line-through";
+                    }
+
                     return (
                       <div
                         key={charId}
-                        className={`flex items-center gap-3 p-3 rounded-xl border ${hasPlayed ? "bg-slate-900 border-slate-800 opacity-50 grayscale" : "bg-slate-800 border-slate-600"}`}
+                        className={`flex items-center gap-3 p-3 rounded-xl border ${borderClass}`}
                       >
                         <div
                           className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs border-2 ${getCharStyle(charId)}`}
                         >
                           {charId}
                         </div>
-                        <span
-                          className={`font-bold text-xs ${hasPlayed ? "text-slate-500 line-through" : "text-white"}`}
-                        >
-                          {char.name}
+                        <span className={`font-bold text-xs ${textClass}`}>
+                          {char.name} {isDead && "(MORT)"}
                         </span>
                       </div>
                     );
