@@ -1,10 +1,51 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabase";
-import { DISTRICTS, CHARACTERS } from "./cards";
 
 // ==========================================
-// 1. DATA & DESCRIPTIONS
+// 1. DONNÉES OFFICIELLES (TRUE RNG)
 // ==========================================
+const CHARACTERS = [
+  { id: 1, name: "Assassin", color: "gray" },
+  { id: 2, name: "Voleur", color: "gray" },
+  { id: 3, name: "Magicien", color: "gray" },
+  { id: 4, name: "Roi", color: "yellow" },
+  { id: 5, name: "Évêque", color: "blue" },
+  { id: 6, name: "Marchand", color: "green" },
+  { id: 7, name: "Architecte", color: "gray" },
+  { id: 8, name: "Condottiere", color: "red" },
+];
+
+const DISTRICTS = [
+  { id: 1, name: "Temple", cost: 1, color: "blue", qty: 3 },
+  { id: 2, name: "Église", cost: 2, color: "blue", qty: 3 },
+  { id: 3, name: "Monastère", cost: 3, color: "blue", qty: 3 },
+  { id: 4, name: "Cathédrale", cost: 5, color: "blue", qty: 2 },
+  { id: 5, name: "Tour de guet", cost: 1, color: "red", qty: 3 },
+  { id: 6, name: "Prison", cost: 2, color: "red", qty: 3 },
+  { id: 7, name: "Caserne", cost: 3, color: "red", qty: 3 },
+  { id: 8, name: "Forteresse", cost: 5, color: "red", qty: 2 },
+  { id: 9, name: "Manoir", cost: 3, color: "yellow", qty: 5 },
+  { id: 10, name: "Château", cost: 4, color: "yellow", qty: 4 },
+  { id: 11, name: "Palais", cost: 5, color: "yellow", qty: 3 },
+  { id: 12, name: "Taverne", cost: 1, color: "green", qty: 5 },
+  { id: 13, name: "Échoppe", cost: 2, color: "green", qty: 3 },
+  { id: 14, name: "Marché", cost: 2, color: "green", qty: 4 },
+  { id: 15, name: "Comptoir", cost: 3, color: "green", qty: 3 },
+  { id: 16, name: "Port", cost: 4, color: "green", qty: 3 },
+  { id: 17, name: "Hôtel de ville", cost: 5, color: "green", qty: 2 },
+  { id: 18, name: "Cour des Miracles", cost: 2, color: "purple", qty: 1 },
+  { id: 19, name: "Donjon", cost: 3, color: "purple", qty: 1 },
+  { id: 20, name: "Laboratoire", cost: 5, color: "purple", qty: 1 },
+  { id: 21, name: "Forge", cost: 5, color: "purple", qty: 1 },
+  { id: 22, name: "Observatoire", cost: 5, color: "purple", qty: 1 },
+  { id: 23, name: "Cimetière", cost: 5, color: "purple", qty: 1 },
+  { id: 24, name: "Bibliothèque", cost: 6, color: "purple", qty: 1 },
+  { id: 25, name: "École de Magie", cost: 6, color: "purple", qty: 1 },
+  { id: 26, name: "Grande Muraille", cost: 6, color: "purple", qty: 1 },
+  { id: 27, name: "Université", cost: 6, color: "purple", qty: 1 },
+  { id: 28, name: "Dracoport", cost: 6, color: "purple", qty: 1 },
+];
+
 const WONDER_DESC = {
   "Cour des Miracles":
     "Compte comme la dernière couleur manquante pour le bonus de 3pts.",
@@ -44,7 +85,7 @@ body { font-family: 'MedievalSharp', cursive; background-color: #0c0a09; color: 
 `;
 
 const getCharColors = (id) => {
-  const c = CHARACTERS.find((x) => x.id === id);
+  const c = CHARACTERS.find((x) => x.id == id); // Loose equality
   if (!c)
     return {
       border: "border-stone-500",
@@ -114,7 +155,7 @@ const DistrictCard = ({
   destroyable,
   setTooltip,
 }) => {
-  const c = DISTRICTS.find((d) => d.id === id);
+  const c = DISTRICTS.find((d) => d.id == id);
   if (!c) return null;
   let colors = {
     border: "border-purple-500",
@@ -204,41 +245,81 @@ const DistrictCard = ({
   );
 };
 
+const LoadingScreen = ({ onCancel }) => (
+  <div className="h-screen w-screen bg-black flex flex-col items-center justify-center text-amber-600 font-family-medieval relative">
+    <style>{GLOBAL_STYLES}</style>
+    <div className="text-6xl mb-4 animate-pulse">🏰</div>
+    <h2 className="text-3xl font-bold uppercase tracking-[0.3em] animate-pulse">
+      Restauration du Royaume...
+    </h2>
+    <button
+      onClick={onCancel}
+      className="mt-8 text-xs text-stone-500 hover:text-stone-300 underline"
+    >
+      Annuler et revenir au menu
+    </button>
+  </div>
+);
+
+const LeaveButton = ({ onClick }) => (
+  <button
+    onClick={onClick}
+    className="absolute top-4 left-4 z-50 bg-red-900/80 hover:bg-red-800 text-red-200 border border-red-600 w-10 h-10 flex items-center justify-center rounded-full font-bold shadow-lg transition-transform active:scale-95"
+    title="Quitter la partie"
+  >
+    ✕
+  </button>
+);
+
 // ==========================================
 // 4. LOGIQUE APP
 // ==========================================
 function App() {
+  const hasSavedSession = !!(
+    localStorage.getItem("citadelles_room_id") &&
+    localStorage.getItem("citadelles_player_id")
+  );
+  const [loading, setLoading] = useState(hasSavedSession);
+
   const [view, setView] = useState("login");
-  const [loading, setLoading] = useState(true);
   const [notification, setNotification] = useState(null);
   const [tooltip, setTooltip] = useState(null);
+
   const [pseudo, setPseudo] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [roomId, setRoomId] = useState(null);
   const [myId, setMyId] = useState(null);
+
   const [players, setPlayers] = useState([]);
   const [gameStatus, setGameStatus] = useState("waiting");
   const [roomHostId, setRoomHostId] = useState(null);
   const [kingPlayerId, setKingPlayerId] = useState(null);
   const [onlineIds, setOnlineIds] = useState([]);
+
   const [currentTurnNumber, setCurrentTurnNumber] = useState(1);
   const [turnPhase, setTurnPhase] = useState("resource");
   const [draftPile, setDraftPile] = useState([]);
   const [draftSubStep, setDraftSubStep] = useState("pick");
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
+
   const [drawOptions, setDrawOptions] = useState([]);
   const [killedId, setKilledId] = useState(null);
   const [robbedId, setRobbedId] = useState(null);
   const [buildsCount, setBuildsCount] = useState(0);
   const [firstBuilderId, setFirstBuilderId] = useState(null);
+
   const [magicMode, setMagicMode] = useState(null);
   const [magicSelectedCards, setMagicSelectedCards] = useState([]);
   const [warMode, setWarMode] = useState(false);
   const [abilityUsed, setAbilityUsed] = useState(false);
   const [showLabModal, setShowLabModal] = useState(false);
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [playerToKickId, setPlayerToKickId] = useState(null);
+
   const [labUsed, setLabUsed] = useState(false);
   const [smithyUsed, setSmithyUsed] = useState(false);
   const [incomeCollected, setIncomeCollected] = useState(false);
+  const [turnStartIncome, setTurnStartIncome] = useState(0);
 
   const myIdRef = useRef(null);
   const roomIdRef = useRef(null);
@@ -261,43 +342,156 @@ function App() {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  // --- INIT & REALTIME ---
+  // --- INIT ROBUSTE ---
   useEffect(() => {
+    if (!hasSavedSession) {
+      setLoading(false);
+      return;
+    }
     const init = async () => {
       const sR = localStorage.getItem("citadelles_room_id");
       const sP = localStorage.getItem("citadelles_player_id");
-      if (sR && sP) {
-        const { data: rm } = await supabase
-          .from("rooms")
-          .select("*")
-          .eq("id", sR)
-          .single();
-        if (rm) {
-          const { data: p } = await supabase
-            .from("players")
-            .select("*")
-            .eq("user_id", sP)
-            .eq("room_id", sR)
-            .single();
-          if (p) {
-            setMyId(sP);
-            setRoomId(sR);
-            setRoomCode(rm.code);
-            setPseudo(p.pseudo);
-            setView(
-              rm.status === "waiting"
-                ? "lobby"
-                : rm.status === "finished"
-                  ? "finished"
-                  : "game",
-            );
-          }
+      const { data: rm, error: errRoom } = await supabase
+        .from("rooms")
+        .select("*")
+        .eq("id", sR)
+        .single();
+      if (errRoom) {
+        if (errRoom.code === "PGRST116") {
+          localStorage.clear();
+          setLoading(false);
+          return;
         }
+        return;
       }
-      setLoading(false);
+      if (!rm) {
+        localStorage.clear();
+        setLoading(false);
+        return;
+      }
+      const { data: p, error: errPlayer } = await supabase
+        .from("players")
+        .select("*")
+        .eq("user_id", sP)
+        .eq("room_id", sR)
+        .single();
+      if (errPlayer) {
+        if (errPlayer.code === "PGRST116") {
+          localStorage.clear();
+          setLoading(false);
+          return;
+        }
+        return;
+      }
+      if (rm && p) {
+        setMyId(sP);
+        setRoomId(sR);
+        setRoomCode(rm.code);
+        setPseudo(p.pseudo);
+        setView(
+          rm.status === "waiting"
+            ? "lobby"
+            : rm.status === "finished"
+              ? "finished"
+              : "game",
+        );
+        setLoading(false);
+      } else {
+        localStorage.clear();
+        setLoading(false);
+      }
     };
     init();
   }, []);
+
+  const kickPlayer = async (userId) => {
+    await supabase
+      .from("players")
+      .delete()
+      .eq("user_id", userId)
+      .eq("room_id", roomId);
+    setPlayerToKickId(null);
+  };
+
+  const confirmLeaveGame = async () => {
+    if (myId && roomId)
+      await supabase
+        .from("players")
+        .delete()
+        .eq("user_id", myId)
+        .eq("room_id", roomId);
+    localStorage.removeItem("citadelles_room_id");
+    localStorage.removeItem("citadelles_player_id");
+    setRoomId(null);
+    setMyId(null);
+    setPlayers([]);
+    setView("login");
+    setLoading(false);
+    setShowLeaveModal(false);
+  };
+
+  // --- HELPER DECK ---
+  const shuffle = (array) => {
+    let i = array.length,
+      r;
+    const n = [...array];
+    while (i !== 0) {
+      r = Math.floor(Math.random() * i);
+      i--;
+      [n[i], n[r]] = [n[r], n[i]];
+    }
+    return n;
+  };
+  const generateFullDeck = () => {
+    let deck = [];
+    DISTRICTS.forEach((card) => {
+      for (let i = 0; i < (card.qty || 1); i++) deck.push(card.id);
+    });
+    return shuffle(deck);
+  };
+
+  const rebuildDeckIfNeeded = async (currentStack, neededCount) => {
+    if (currentStack.length >= neededCount) return currentStack;
+    const { data: allPlayers } = await supabase
+      .from("players")
+      .select("hand, city")
+      .eq("room_id", roomId);
+    const countsInPlay = {};
+    currentStack.forEach(
+      (id) => (countsInPlay[id] = (countsInPlay[id] || 0) + 1),
+    );
+    if (allPlayers) {
+      allPlayers.forEach((p) => {
+        (p.hand || []).forEach(
+          (id) => (countsInPlay[id] = (countsInPlay[id] || 0) + 1),
+        );
+        (p.city || []).forEach(
+          (id) => (countsInPlay[id] = (countsInPlay[id] || 0) + 1),
+        );
+      });
+    }
+    let discarded = [];
+    DISTRICTS.forEach((card) => {
+      const totalExisting = card.qty || 1;
+      const currentlyInUse = countsInPlay[card.id] || 0;
+      const inDiscard = totalExisting - currentlyInUse;
+      for (let i = 0; i < inDiscard; i++) discarded.push(card.id);
+    });
+    const newStack = [...currentStack, ...shuffle(discarded)];
+    notify("La pioche a été reconstituée.", "info");
+    return newStack;
+  };
+
+  // --- HELPER ARRAY REMOVE ONE ITEM ---
+  const removeOne = (arr, val) => {
+    const idx = arr.indexOf(val);
+    if (idx === -1) return arr;
+    const newArr = [...arr];
+    newArr.splice(idx, 1);
+    return newArr;
+  };
+
+  // --- REALTIME ---
   useEffect(() => {
     if (!roomId) return;
     const fetchAll = async () => {
@@ -306,7 +500,22 @@ function App() {
         .select("*")
         .eq("room_id", roomId)
         .order("joined_at", { ascending: true });
-      if (ps) setPlayers(ps);
+      if (ps) {
+        setPlayers(ps);
+        const amIHere = ps.find((p) => p.user_id === myId);
+        if (myId && !amIHere) {
+          localStorage.removeItem("citadelles_room_id");
+          localStorage.removeItem("citadelles_player_id");
+          setRoomId(null);
+          setMyId(null);
+          setPlayers([]);
+          setView("login");
+          setLoading(false);
+          if (view !== "login")
+            notify("Vous avez été exclu par l'hôte.", "error");
+          return;
+        }
+      }
       const { data: r } = await supabase
         .from("rooms")
         .select("*")
@@ -316,12 +525,12 @@ function App() {
         if (r.king_player_id && r.king_player_id !== kingPlayerIdRef.current)
           notify("Le Roi est mort, Vive le Roi !", "gold");
         if (r.killed_char_id && r.killed_char_id !== lastKilledRef.current) {
-          const n = CHARACTERS.find((c) => c.id === r.killed_char_id)?.name;
+          const n = CHARACTERS.find((c) => c.id == r.killed_char_id)?.name;
           notify(`L'Assassin a tué ${n} !`, "error");
           lastKilledRef.current = r.killed_char_id;
         }
         if (r.robbed_char_id && r.robbed_char_id !== lastRobbedRef.current) {
-          const n = CHARACTERS.find((c) => c.id === r.robbed_char_id)?.name;
+          const n = CHARACTERS.find((c) => c.id == r.robbed_char_id)?.name;
           notify(`Le Voleur a détroussé ${n} !`, "info");
           lastRobbedRef.current = r.robbed_char_id;
         }
@@ -339,6 +548,7 @@ function App() {
         if (r.status === "finished") setView("finished");
         else if (r.status !== "waiting") setView("game");
         else setView("lobby");
+        setLoading(false);
       }
     };
     fetchAll();
@@ -383,7 +593,6 @@ function App() {
   // --- LOGIQUE TOUR ---
   useEffect(() => {
     if (gameStatus !== "playing") return;
-
     setBuildsCount(0);
     setWarMode(false);
     setMagicMode(null);
@@ -393,38 +602,47 @@ function App() {
     setSmithyUsed(false);
     setIncomeCollected(false);
     setShowLabModal(false);
-
-    // FIX CROWN : Check immédiat + Intervalle
-    const checkForCrown = async () => {
-      if (myId !== roomHostId || currentTurnNumber !== 4) return;
-      const kingOwner = playersRef.current.find((p) =>
-        (p.characters || []).includes(4),
-      );
-      if (kingOwner && kingOwner.user_id !== kingPlayerIdRef.current) {
-        await supabase
-          .from("rooms")
-          .update({ king_player_id: kingOwner.user_id })
-          .eq("id", roomId);
-      }
-    };
-    checkForCrown(); // Check immédiat
-    const kingInterval = setInterval(checkForCrown, 2000); // Check sécurité
-
-    // GESTION MORT (avec délai)
+    setTurnStartIncome(0);
+    let kingInterval = null;
+    if (myId === roomHostId && currentTurnNumber === 4) {
+      kingInterval = setInterval(async () => {
+        const kingOwner = playersRef.current.find((p) =>
+          (p.characters || []).includes(4),
+        );
+        if (kingOwner && kingOwner.user_id !== kingPlayerIdRef.current)
+          await supabase
+            .from("rooms")
+            .update({ king_player_id: kingOwner.user_id })
+            .eq("id", roomId);
+      }, 2000);
+    }
     if (myId === roomHostId && killedId === currentTurnNumber) {
       const t = setTimeout(() => forceNextTurn(), 4000);
       return () => {
         clearTimeout(t);
-        clearInterval(kingInterval);
+        if (kingInterval) clearInterval(kingInterval);
       };
     }
-
     const me = players.find((p) => p.user_id === myId);
     if (
       me &&
       (me.characters || []).includes(currentTurnNumber) &&
       turnPhase === "resource"
     ) {
+      // SNAPSHOT REVENUS
+      let targetColor =
+        currentTurnNumber === 4
+          ? "yellow"
+          : currentTurnNumber === 5
+            ? "blue"
+            : currentTurnNumber === 6
+              ? "green"
+              : "red";
+      let amount = (me.city || []).filter((id) => {
+        const d = DISTRICTS.find((x) => x.id == id);
+        return d && (d.color === targetColor || d.name === "École de Magie");
+      }).length;
+      setTurnStartIncome(amount);
       if (robbedId === currentTurnNumber && killedId !== currentTurnNumber) {
         const thief = players.find((p) => (p.characters || []).includes(2));
         if (thief && me.gold > 0) {
@@ -457,7 +675,11 @@ function App() {
             .select("district_stack")
             .eq("id", roomId)
             .single();
-          let stack = [...r.district_stack];
+          const freshStack = await rebuildDeckIfNeeded(
+            r.district_stack || [],
+            2,
+          );
+          let stack = [...freshStack];
           const drawn = stack.splice(0, 2);
           await supabase
             .from("rooms")
@@ -465,26 +687,135 @@ function App() {
             .eq("id", roomId);
           await supabase
             .from("players")
-            .update({ hand: [...me.hand, ...drawn] })
+            .update({ hand: [...(me.hand || []), ...drawn] })
             .eq("user_id", myId);
           notify("Architecte : +2 Cartes", "info");
         };
         fetchBonus();
       }
     }
-    return () => clearInterval(kingInterval);
+    return () => {
+      if (kingInterval) clearInterval(kingInterval);
+    };
   }, [currentTurnNumber, gameStatus, killedId]);
 
-  const shuffle = (array) => {
-    let i = array.length,
-      r;
-    const n = [...array];
-    while (i !== 0) {
-      r = Math.floor(Math.random() * i);
-      i--;
-      [n[i], n[r]] = [n[r], n[i]];
+  const getUserId = async () => {
+    const { data } = await supabase.auth.getSession();
+    return (
+      data.session?.user?.id ||
+      (await supabase.auth.signInAnonymously()).data.user.id
+    );
+  };
+  const createRoom = async () => {
+    if (!pseudo) return;
+    const u = await getUserId();
+    const c = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const { data: r } = await supabase
+      .from("rooms")
+      .insert([{ code: c, host_id: u, king_player_id: u }])
+      .select()
+      .single();
+    await supabase
+      .from("players")
+      .insert([{ room_id: r.id, user_id: u, pseudo, gold: 2 }]);
+    localStorage.setItem("citadelles_room_id", r.id);
+    localStorage.setItem("citadelles_player_id", u);
+    setMyId(u);
+    setRoomId(r.id);
+    setRoomCode(c);
+    setView("lobby");
+  };
+  const joinRoom = async () => {
+    if (!pseudo || !roomCode) return;
+    const u = await getUserId();
+    const { data: r } = await supabase
+      .from("rooms")
+      .select()
+      .eq("code", roomCode)
+      .single();
+    if (r) {
+      const { count } = await supabase
+        .from("players")
+        .select("*", { count: "exact", head: true })
+        .eq("room_id", r.id);
+      if (count >= 7) return notify("Cette table est complète !", "error");
+      await supabase
+        .from("players")
+        .insert([{ room_id: r.id, user_id: u, pseudo, gold: 2 }]);
+      localStorage.setItem("citadelles_room_id", r.id);
+      localStorage.setItem("citadelles_player_id", u);
+      setMyId(u);
+      setRoomId(r.id);
+      setView("lobby");
+    } else {
+      notify("Code invalide", "error");
     }
-    return n;
+  };
+  const startGame = async () => {
+    const { data: latestPlayers } = await supabase
+      .from("players")
+      .select("*")
+      .eq("room_id", roomId)
+      .order("joined_at", { ascending: true });
+    const d = generateFullDeck();
+    for (const p of latestPlayers)
+      await supabase
+        .from("players")
+        .update({ hand: d.splice(0, 4) })
+        .eq("user_id", p.user_id)
+        .eq("room_id", roomId);
+    const pc = latestPlayers.length;
+    let c = shuffle([...CHARACTERS]);
+    const fd = c.pop();
+    const fu = c.splice(0, pc === 4 ? 2 : pc === 5 ? 1 : 0);
+    await supabase
+      .from("rooms")
+      .update({
+        status: "drafting",
+        district_stack: d,
+        draft_pile: c,
+        face_down_char: fd.id,
+        face_up_chars: fu,
+        current_player_index: 0,
+        current_character_turn: 1,
+      })
+      .eq("id", roomId);
+  };
+  const backToLobby = async () => {
+    await supabase
+      .from("rooms")
+      .update({ status: "waiting", first_builder_id: null })
+      .eq("id", roomId);
+    await supabase
+      .from("players")
+      .update({
+        city: [],
+        hand: [],
+        gold: 2,
+        characters: [],
+        played_characters: [],
+      })
+      .eq("room_id", roomId);
+  };
+
+  const calculateScore = (p) => {
+    let score = 0;
+    const colors = new Set();
+    const hasHauntedCity = (p.city || []).some(
+      (id) =>
+        (DISTRICTS.find((d) => d.id == id)?.name || "") === "Cour des Miracles",
+    );
+    (p.city || []).forEach((id) => {
+      const c = DISTRICTS.find((d) => d.id == id);
+      if (c) {
+        score += c.cost;
+        colors.add(c.color);
+      }
+    });
+    if (colors.size >= 5 || (hasHauntedCity && colors.size === 4)) score += 3;
+    if (p.user_id === firstBuilderId) score += 4;
+    else if ((p.city || []).length >= 8) score += 2;
+    return score;
   };
 
   // --- ACTIONS ---
@@ -564,13 +895,16 @@ function App() {
       .select("district_stack")
       .eq("id", roomId)
       .single();
-    let s = (r.district_stack || []).map((i) =>
-      typeof i === "object" ? i.id : i,
-    );
+    let s = r.district_stack || [];
     const hasObs = (me.city || []).some(
-      (id) => DISTRICTS.find((d) => d.id === id).name === "Observatoire",
+      (id) => DISTRICTS.find((d) => d.id == id)?.name === "Observatoire",
     );
     const count = hasObs ? 3 : 2;
+    s = await rebuildDeckIfNeeded(s, count);
+    if (s.length < count) {
+      notify("La pioche est épuisée !", "error");
+      return;
+    }
     const opts = s.splice(0, count);
     setDrawOptions(opts);
     await supabase
@@ -582,10 +916,10 @@ function App() {
   const pickDrawnCard = async (cid) => {
     const me = players.find((p) => p.user_id === myId);
     const hasLibrary = (me.city || []).some(
-      (id) => DISTRICTS.find((d) => d.id === id).name === "Bibliothèque",
+      (id) => DISTRICTS.find((d) => d.id == id)?.name === "Bibliothèque",
     );
     const kept = hasLibrary ? drawOptions : [cid];
-    const rejected = hasLibrary ? [] : drawOptions.filter((id) => id !== cid);
+    const rejected = hasLibrary ? [] : removeOne(drawOptions, cid);
     const { data: r } = await supabase
       .from("rooms")
       .select("district_stack")
@@ -611,7 +945,7 @@ function App() {
   const buildDistrict = async (cid) => {
     const me = playersRef.current.find((p) => p.user_id === myIdRef.current);
     if (!me) return notify("Erreur sync", "error");
-    const c = DISTRICTS.find((d) => d.id === cid);
+    const c = DISTRICTS.find((d) => d.id == cid);
     if (me.gold < c.cost) return notify("Pas assez d'or !", "error");
     const limit = currentTurnNumber === 7 ? 3 : 1;
     if (buildsCount >= limit) return notify("Limite atteinte !", "error");
@@ -620,7 +954,7 @@ function App() {
       .from("players")
       .update({
         city: newCity,
-        hand: me.hand.filter((id) => id !== cid),
+        hand: removeOne(me.hand || [], cid),
         gold: me.gold - c.cost,
       })
       .eq("user_id", myId)
@@ -639,8 +973,11 @@ function App() {
   const destroyDistrict = async (targetPlayerId, districtId, cost) => {
     const me = players.find((p) => p.user_id === myId);
     const target = players.find((p) => p.user_id === targetPlayerId);
+    const isBishop = (target.characters || []).includes(5);
+    if (isBishop && killedId !== 5)
+      return notify("Impossible ! L'Évêque est protégé par l'Église.", "error");
     const hasGreatWall = (target.city || []).some(
-      (id) => DISTRICTS.find((d) => d.id === id).name === "Grande Muraille",
+      (id) => DISTRICTS.find((d) => d.id == id)?.name === "Grande Muraille",
     );
     const destCost = cost - 1 + (hasGreatWall ? 1 : 0);
     if (me.gold < destCost)
@@ -648,12 +985,7 @@ function App() {
         hasGreatWall ? "Grande Muraille : Coût +1 Or !" : "Pas assez d'or !",
         "error",
       );
-    const isBishop =
-      (target.characters || []).includes(5) &&
-      !(target.played_characters || []).includes(5);
-    if (isBishop && killedId !== 5)
-      return notify("L'Évêque est protégé !", "error");
-    if (DISTRICTS.find((d) => d.id === districtId).name === "Donjon")
+    if (DISTRICTS.find((d) => d.id == districtId)?.name === "Donjon")
       return notify("Le Donjon est indestructible !", "error");
     await supabase
       .from("players")
@@ -662,20 +994,18 @@ function App() {
       .eq("room_id", roomId);
     await supabase
       .from("players")
-      .update({ city: target.city.filter((id) => id !== districtId) })
+      .update({ city: removeOne(target.city || [], districtId) })
       .eq("user_id", targetPlayerId)
       .eq("room_id", roomId);
     setWarMode(false);
     setAbilityUsed(true);
     notify("Quartier détruit !", "success");
   };
-
-  // ACTIONS MERVEILLES & REVENUS (CALCUL DYNAMIQUE)
   const useLab = async (cid) => {
     const me = players.find((p) => p.user_id === myId);
     await supabase
       .from("players")
-      .update({ hand: me.hand.filter((id) => id !== cid), gold: me.gold + 1 })
+      .update({ hand: removeOne(me.hand || [], cid), gold: me.gold + 1 })
       .eq("user_id", myId);
     setLabUsed(true);
     setShowLabModal(false);
@@ -689,83 +1019,29 @@ function App() {
       .select("district_stack")
       .eq("id", roomId)
       .single();
-    let s = [...r.district_stack];
+    let s = r.district_stack || [];
+    s = await rebuildDeckIfNeeded(s, 3);
+    if (s.length < 3) return notify("Pioche épuisée pour la Forge.", "error");
     const drawn = s.splice(0, 3);
     await supabase.from("rooms").update({ district_stack: s }).eq("id", roomId);
     await supabase
       .from("players")
-      .update({ hand: [...me.hand, ...drawn], gold: me.gold - 2 })
+      .update({ hand: [...(me.hand || []), ...drawn], gold: me.gold - 2 })
       .eq("user_id", myId);
     setSmithyUsed(true);
     notify("Forge : 3 Cartes forgées !", "success");
-  };
-
-  const getIncomeAmount = () => {
-    const me = players.find((p) => p.user_id === myId);
-    if (!me) return 0;
-    let targetColor =
-      currentTurnNumber === 4
-        ? "yellow"
-        : currentTurnNumber === 5
-          ? "blue"
-          : currentTurnNumber === 6
-            ? "green"
-            : "red";
-    let amount = me.city.filter((id) => {
-      const d = DISTRICTS.find((x) => x.id === id);
-      return d.color === targetColor || d.name === "École de Magie";
-    }).length;
-    return amount;
-  };
-
-  const collectCharacterIncome = async () => {
-    const amount = getIncomeAmount();
-    const me = players.find((p) => p.user_id === myId);
-    if (amount > 0) {
-      await supabase
-        .from("players")
-        .update({ gold: me.gold + amount })
-        .eq("user_id", myId);
-      notify(`Revenus : +${amount} Or`, "gold");
-    }
-    setIncomeCollected(true);
-  };
-
-  const assassinKill = async (tid) => {
-    const me = playersRef.current.find((p) => p.user_id === myIdRef.current);
-    if (me && (me.characters || []).includes(tid))
-      return notify("Suicide interdit !", "error");
-    await supabase
-      .from("rooms")
-      .update({ killed_char_id: tid })
-      .eq("id", roomId);
-    notify("Cible marquée.", "error");
-    setTurnPhase("resource");
-  };
-  const thiefRob = async (tid) => {
-    const me = playersRef.current.find((p) => p.user_id === myIdRef.current);
-    if (me && (me.characters || []).includes(tid))
-      return notify("Auto-vol interdit !", "error");
-    if (tid === killedId) return notify("Déjà mort !", "error");
-    if (tid === 1) return notify("Impossible !", "error");
-    await supabase
-      .from("rooms")
-      .update({ robbed_char_id: tid })
-      .eq("id", roomId);
-    notify("Vol confirmé.", "info");
-    setTurnPhase("resource");
   };
   const magicianSwapPlayer = async (tid) => {
     const me = players.find((p) => p.user_id === myId);
     const target = players.find((p) => p.user_id === tid);
     await supabase
       .from("players")
-      .update({ hand: target.hand })
+      .update({ hand: target.hand || [] })
       .eq("user_id", myId)
       .eq("room_id", roomId);
     await supabase
       .from("players")
-      .update({ hand: me.hand })
+      .update({ hand: me.hand || [] })
       .eq("user_id", tid)
       .eq("room_id", roomId);
     setMagicMode(null);
@@ -780,20 +1056,25 @@ function App() {
       .select("district_stack")
       .eq("id", roomId)
       .single();
-    let stack = [...r.district_stack];
+    let stack = r.district_stack || [];
+    stack = await rebuildDeckIfNeeded(stack, magicSelectedCards.length);
+    if (stack.length < magicSelectedCards.length)
+      return notify(
+        "Pas assez de cartes dans la pioche pour échanger.",
+        "error",
+      );
     const drawn = stack.splice(0, magicSelectedCards.length);
     await supabase
       .from("rooms")
       .update({ district_stack: [...stack, ...magicSelectedCards] })
       .eq("id", roomId);
+    let newHand = [...(me.hand || [])];
+    magicSelectedCards.forEach((c) => {
+      newHand = removeOne(newHand, c);
+    });
     await supabase
       .from("players")
-      .update({
-        hand: [
-          ...me.hand.filter((id) => !magicSelectedCards.includes(id)),
-          ...drawn,
-        ],
-      })
+      .update({ hand: [...newHand, ...drawn] })
       .eq("user_id", myId)
       .eq("room_id", roomId);
     setMagicMode(null);
@@ -874,114 +1155,39 @@ function App() {
       })
       .eq("id", roomId);
   };
-  const getUserId = async () => {
-    const { data } = await supabase.auth.getSession();
-    return (
-      data.session?.user?.id ||
-      (await supabase.auth.signInAnonymously()).data.user.id
-    );
+
+  // FIX CRASH INCOME (Array vs Null)
+  const getIncomeAmount = () => {
+    const me = players.find((p) => p.user_id === myId);
+    if (!me) return 0;
+    let targetColor =
+      currentTurnNumber === 4
+        ? "yellow"
+        : currentTurnNumber === 5
+          ? "blue"
+          : currentTurnNumber === 6
+            ? "green"
+            : "red";
+    let amount = (me.city || []).filter((id) => {
+      const d = DISTRICTS.find((x) => x.id == id);
+      return d && (d.color === targetColor || d.name === "École de Magie");
+    }).length;
+    return amount;
   };
-  const createRoom = async () => {
-    if (!pseudo) return;
-    const u = await getUserId();
-    const c = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const { data: r } = await supabase
-      .from("rooms")
-      .insert([{ code: c, host_id: u, king_player_id: u }])
-      .select()
-      .single();
-    await supabase
-      .from("players")
-      .insert([{ room_id: r.id, user_id: u, pseudo, gold: 2 }]);
-    localStorage.setItem("citadelles_room_id", r.id);
-    localStorage.setItem("citadelles_player_id", u);
-    setMyId(u);
-    setRoomId(r.id);
-    setRoomCode(c);
-    setView("lobby");
-  };
-  const joinRoom = async () => {
-    if (!pseudo || !roomCode) return;
-    const u = await getUserId();
-    const { data: r } = await supabase
-      .from("rooms")
-      .select()
-      .eq("code", roomCode)
-      .single();
-    if (r) {
+  const collectCharacterIncome = async () => {
+    const amount = getIncomeAmount();
+    const me = players.find((p) => p.user_id === myId);
+    if (amount > 0) {
       await supabase
         .from("players")
-        .insert([{ room_id: r.id, user_id: u, pseudo, gold: 2 }]);
-      localStorage.setItem("citadelles_room_id", r.id);
-      localStorage.setItem("citadelles_player_id", u);
-      setMyId(u);
-      setRoomId(r.id);
-      setView("lobby");
+        .update({ gold: me.gold + amount })
+        .eq("user_id", myId);
+      notify(`Revenus : +${amount} Or`, "gold");
     }
-  };
-  const startGame = async () => {
-    const { data: latestPlayers } = await supabase
-      .from("players")
-      .select("*")
-      .eq("room_id", roomId)
-      .order("joined_at", { ascending: true });
-    const d = shuffle([...DISTRICTS]);
-    for (const p of latestPlayers)
-      await supabase
-        .from("players")
-        .update({ hand: d.splice(0, 4).map((c) => c.id) })
-        .eq("user_id", p.user_id)
-        .eq("room_id", roomId);
-    const pc = latestPlayers.length;
-    let c = shuffle([...CHARACTERS]);
-    const fd = c.pop();
-    const fu = c.splice(0, pc === 4 ? 2 : pc === 5 ? 1 : 0);
-    await supabase
-      .from("rooms")
-      .update({
-        status: "drafting",
-        district_stack: d.map((c) => c.id),
-        draft_pile: c,
-        face_down_char: fd.id,
-        face_up_chars: fu,
-        current_player_index: 0,
-        current_character_turn: 1,
-      })
-      .eq("id", roomId);
-  };
-  const backToLobby = async () => {
-    await supabase
-      .from("rooms")
-      .update({ status: "waiting", first_builder_id: null })
-      .eq("id", roomId);
-    await supabase
-      .from("players")
-      .update({
-        city: [],
-        hand: [],
-        gold: 2,
-        characters: [],
-        played_characters: [],
-      })
-      .eq("room_id", roomId);
+    setIncomeCollected(true);
   };
 
-  const calculateScore = (p) => {
-    let score = 0;
-    const colors = new Set();
-    const hasHauntedCity = p.city.some(
-      (id) => DISTRICTS.find((d) => d.id === id).name === "Cour des Miracles",
-    );
-    p.city.forEach((id) => {
-      const c = DISTRICTS.find((d) => d.id === id);
-      score += c.cost;
-      colors.add(c.color);
-    });
-    if (colors.size >= 5 || (hasHauntedCity && colors.size === 4)) score += 3; // FIX SCORE COUR MIRACLES
-    if (p.user_id === firstBuilderId) score += 4;
-    else if (p.city.length >= 8) score += 2;
-    return score;
-  };
+  if (loading) return <LoadingScreen onCancel={confirmLeaveGame} />;
 
   if (view === "login")
     return (
@@ -1027,6 +1233,7 @@ function App() {
     return (
       <div className="min-h-screen flex flex-col items-center p-10 bg-gradient-to-b from-stone-900 to-black text-amber-50 relative">
         <style>{GLOBAL_STYLES}</style>
+        <LeaveButton onClick={() => setShowLeaveModal(true)} />
         <h2 className="text-5xl text-amber-600 mb-8 uppercase tracking-[0.2em]">
           Antichambre
         </h2>
@@ -1055,11 +1262,22 @@ function App() {
                     {p.pseudo}
                   </span>
                 </div>
-                {p.user_id === roomHostId && (
-                  <span className="text-xs bg-amber-900/50 text-amber-500 px-2 py-1 rounded border border-amber-800 uppercase font-bold">
-                    Hôte
-                  </span>
-                )}
+                <div className="flex items-center gap-2">
+                  {p.user_id === roomHostId && (
+                    <span className="text-xs bg-amber-900/50 text-amber-500 px-2 py-1 rounded border border-amber-800 uppercase font-bold">
+                      Hôte
+                    </span>
+                  )}
+                  {myId === roomHostId && p.user_id !== myId && (
+                    <button
+                      onClick={() => setPlayerToKickId(p.user_id)}
+                      className="w-6 h-6 flex items-center justify-center bg-red-900/50 text-red-500 border border-red-800 rounded hover:bg-red-800 hover:text-red-200 transition-colors"
+                      title="Exclure"
+                    >
+                      ✖
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -1072,6 +1290,63 @@ function App() {
             </button>
           )}
         </div>
+        {showLeaveModal && (
+          <div className="fixed inset-0 z-[10000] modal-overlay flex items-center justify-center">
+            <div className="bg-stone-900 border-4 border-red-600 p-6 rounded-lg text-center shadow-2xl max-w-sm">
+              <h3 className="text-2xl text-red-500 font-bold mb-4 uppercase tracking-widest">
+                Déserter ?
+              </h3>
+              <p className="text-stone-300 mb-6 italic">
+                Voulez-vous vraiment quitter le Royaume et abandonner votre Cité
+                ?
+              </p>
+              <div className="flex gap-4 justify-center">
+                <button
+                  onClick={() => setShowLeaveModal(false)}
+                  className="px-6 py-2 bg-stone-700 hover:bg-stone-600 text-stone-200 rounded border border-stone-500 font-bold uppercase"
+                >
+                  Rester
+                </button>
+                <button
+                  onClick={confirmLeaveGame}
+                  className="px-6 py-2 bg-red-900 hover:bg-red-800 text-red-100 rounded border border-red-500 font-bold uppercase"
+                >
+                  Quitter
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {playerToKickId && (
+          <div className="fixed inset-0 z-[10000] modal-overlay flex items-center justify-center">
+            <div className="bg-stone-900 border-4 border-red-600 p-6 rounded-lg text-center shadow-2xl max-w-sm">
+              <h3 className="text-2xl text-red-500 font-bold mb-4 uppercase tracking-widest">
+                Bannissement
+              </h3>
+              <p className="text-stone-300 mb-6 italic">
+                Voulez-vous chasser{" "}
+                <span className="font-bold text-amber-500">
+                  {players.find((p) => p.user_id === playerToKickId)?.pseudo}
+                </span>{" "}
+                de la table ?
+              </p>
+              <div className="flex gap-4 justify-center">
+                <button
+                  onClick={() => setPlayerToKickId(null)}
+                  className="px-6 py-2 bg-stone-700 hover:bg-stone-600 text-stone-200 rounded border border-stone-500 font-bold uppercase"
+                >
+                  Gracier
+                </button>
+                <button
+                  onClick={confirmKick}
+                  className="px-6 py-2 bg-red-900 hover:bg-red-800 text-red-100 rounded border border-red-500 font-bold uppercase"
+                >
+                  Bannir
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   if (view === "finished") {
@@ -1147,10 +1422,10 @@ function App() {
     );
     // Wonder Flags
     const hasLab = (me.city || []).some(
-      (id) => DISTRICTS.find((d) => d.id === id).name === "Laboratoire",
+      (id) => DISTRICTS.find((d) => d.id == id)?.name === "Laboratoire",
     );
     const hasSmithy = (me.city || []).some(
-      (id) => DISTRICTS.find((d) => d.id === id).name === "Forge",
+      (id) => DISTRICTS.find((d) => d.id == id)?.name === "Forge",
     );
     const incomeAmount = getIncomeAmount(); // CALCUL AVANT LE RENDU
     const canCollectIncome =
@@ -1197,6 +1472,23 @@ function App() {
           </div>
         )}
 
+        {/* BOUTON SECOURS (PIOCE VIDE) */}
+        {isMyCharTurn &&
+          turnPhase === "drawing" &&
+          drawOptions.length === 0 && (
+            <div className="absolute top-1/3 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 z-50">
+              <div className="text-amber-500 font-bold animate-pulse text-xl">
+                Aucune carte à piocher !
+              </div>
+              <button
+                onClick={() => setTurnPhase("resource")}
+                className="px-6 py-3 bg-red-900 hover:bg-red-800 text-red-100 rounded border border-red-500 font-bold uppercase shadow-lg"
+              >
+                Annuler la Pioche
+              </button>
+            </div>
+          )}
+
         {showLabModal && (
           <div className="fixed inset-0 z-[9999] modal-overlay flex flex-col items-center justify-center p-8">
             <h3 className="text-4xl text-amber-500 font-bold mb-8 uppercase tracking-[0.2em] drop-shadow-lg">
@@ -1207,7 +1499,7 @@ function App() {
               <span className="text-yellow-500 font-bold">1 Or</span>
             </p>
             <div className="flex gap-4 overflow-x-auto p-4 max-w-full">
-              {me.hand.map((hid) => (
+              {(me.hand || []).map((hid) => (
                 <div
                   key={hid}
                   className="hover:-translate-y-4 transition-transform cursor-pointer"
@@ -1241,13 +1533,14 @@ function App() {
                     💰{opp.gold}
                   </span>
                   <span className="text-blue-400 font-bold">
-                    🎴{opp.hand.length}
+                    🎴{(opp.hand || []).length}
                   </span>
                 </div>
               </div>
               <div className="flex-1 flex flex-wrap content-start gap-1 overflow-hidden bg-black/30 p-1 rounded inner-shadow">
-                {opp.city.map((cid, i) => {
-                  const c = DISTRICTS.find((d) => d.id === cid);
+                {(opp.city || []).map((cid, i) => {
+                  const c = DISTRICTS.find((d) => d.id == cid);
+                  if (!c) return null;
                   const isBishop =
                     (opp.characters || []).includes(5) &&
                     !(opp.played_characters || []).includes(5);
@@ -1526,8 +1819,6 @@ function App() {
                           CLIQUEZ SUR UN QUARTIER ADVERSE (HAUT DE L'ÉCRAN)
                         </div>
                       )}
-
-                      {/* BOUTONS SPECIAUX */}
                       <div className="flex flex-wrap gap-2 justify-center border-t border-stone-800 pt-3">
                         {canCollectIncome && (
                           <button
@@ -1540,7 +1831,8 @@ function App() {
                         {hasLab && !labUsed && (
                           <button
                             onClick={() => {
-                              if (me.hand.length > 0) setShowLabModal(true);
+                              if ((me.hand || []).length > 0)
+                                setShowLabModal(true);
                               else notify("Main vide !", "error");
                             }}
                             className="bg-purple-900 px-2 py-1 rounded text-[10px] border border-purple-500 text-purple-200 hover:bg-purple-800"
@@ -1557,7 +1849,6 @@ function App() {
                           </button>
                         )}
                       </div>
-
                       <div className="text-center text-stone-400 italic tracking-wider text-xs pt-4">
                         Construisez un quartier ou terminez votre tour.
                       </div>
@@ -1627,8 +1918,8 @@ function App() {
               Votre Main
             </div>
             <div className="flex justify-center items-end w-full h-full">
-              {me.hand.map((hid, idx) => {
-                const total = me.hand.length;
+              {(me.hand || []).map((hid, idx) => {
+                const total = (me.hand || []).length;
                 const center = (total - 1) / 2;
                 const dist = idx - center;
                 const rot = dist * 5;
@@ -1674,10 +1965,10 @@ function App() {
           <div className="w-80 h-full bg-stone-900/80 rounded-lg border-2 border-stone-700 p-3 shadow-2xl flex flex-col relative overflow-hidden z-10">
             <div className="absolute top-0 inset-x-0 h-8 bg-gradient-to-b from-stone-900 via-stone-900/80 to-transparent z-10 pointer-events-none" />
             <h3 className="text-center text-xs text-stone-300 font-bold uppercase tracking-[0.3em] mb-3 pt-1 sticky top-0 z-20 drop-shadow-md">
-              Votre Cité ({me.city.length}/8)
+              Votre Cité ({(me.city || []).length}/8)
             </h3>
             <div className="flex-1 overflow-y-auto flex flex-wrap content-start gap-2 pr-1 pb-2 custom-scrollbar bg-black/30 p-2 rounded inner-shadow">
-              {me.city.map((cid, i) => (
+              {(me.city || []).map((cid, i) => (
                 <DistrictCard
                   key={i}
                   id={cid}
