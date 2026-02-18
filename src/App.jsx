@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabase";
 
 // ==========================================
-// 1. DONNÉES OFFICIELLES (TRUE RNG)
+// 1. DONNÉES
 // ==========================================
 const CHARACTERS = [
   { id: 1, name: "Assassin", color: "gray" },
@@ -68,7 +68,7 @@ const getCardDesc = (card) => {
 };
 
 // ==========================================
-// 2. STYLES & ASSETS
+// 2. STYLES
 // ==========================================
 const GLOBAL_STYLES = `
 @import url('https://fonts.googleapis.com/css2?family=MedievalSharp&display=swap');
@@ -85,7 +85,7 @@ body { font-family: 'MedievalSharp', cursive; background-color: #0c0a09; color: 
 `;
 
 const getCharColors = (id) => {
-  const c = CHARACTERS.find((x) => x.id == id); // Loose equality
+  const c = CHARACTERS.find((x) => x.id == id);
   if (!c)
     return {
       border: "border-stone-500",
@@ -245,19 +245,27 @@ const DistrictCard = ({
   );
 };
 
-const LoadingScreen = ({ onCancel }) => (
+const LoadingScreen = ({ onCancel, onReset }) => (
   <div className="h-screen w-screen bg-black flex flex-col items-center justify-center text-amber-600 font-family-medieval relative">
     <style>{GLOBAL_STYLES}</style>
     <div className="text-6xl mb-4 animate-pulse">🏰</div>
     <h2 className="text-3xl font-bold uppercase tracking-[0.3em] animate-pulse">
       Restauration du Royaume...
     </h2>
-    <button
-      onClick={onCancel}
-      className="mt-8 text-xs text-stone-500 hover:text-stone-300 underline"
-    >
-      Annuler et revenir au menu
-    </button>
+    <div className="flex flex-col gap-4 mt-8">
+      <button
+        onClick={onCancel}
+        className="text-xs text-stone-500 hover:text-stone-300 underline"
+      >
+        Annuler et revenir au menu
+      </button>
+      <button
+        onClick={onReset}
+        className="px-4 py-2 bg-red-900/30 border border-red-800 text-red-500 text-xs font-bold uppercase hover:bg-red-900 hover:text-white transition-colors"
+      >
+        🛑 Réinitialisation d'Urgence
+      </button>
+    </div>
   </div>
 );
 
@@ -321,6 +329,9 @@ function App() {
   const [incomeCollected, setIncomeCollected] = useState(false);
   const [turnStartIncome, setTurnStartIncome] = useState(0);
 
+  // V110: Anti-Spam state
+  const [isActionPending, setIsActionPending] = useState(false);
+
   const myIdRef = useRef(null);
   const roomIdRef = useRef(null);
   const playersRef = useRef([]);
@@ -342,7 +353,11 @@ function App() {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  // --- INIT ROBUSTE ---
+  const fullReset = () => {
+    localStorage.clear();
+    window.location.reload();
+  };
+
   useEffect(() => {
     if (!hasSavedSession) {
       setLoading(false);
@@ -356,15 +371,7 @@ function App() {
         .select("*")
         .eq("id", sR)
         .single();
-      if (errRoom) {
-        if (errRoom.code === "PGRST116") {
-          localStorage.clear();
-          setLoading(false);
-          return;
-        }
-        return;
-      }
-      if (!rm) {
+      if (errRoom || !rm) {
         localStorage.clear();
         setLoading(false);
         return;
@@ -376,11 +383,8 @@ function App() {
         .eq("room_id", sR)
         .single();
       if (errPlayer) {
-        if (errPlayer.code === "PGRST116") {
-          localStorage.clear();
-          setLoading(false);
-          return;
-        }
+        localStorage.clear();
+        setLoading(false);
         return;
       }
       if (rm && p) {
@@ -412,14 +416,24 @@ function App() {
       .eq("room_id", roomId);
     setPlayerToKickId(null);
   };
-
+  const confirmKick = async () => {
+    if (playerToKickId) await kickPlayer(playerToKickId);
+  };
   const confirmLeaveGame = async () => {
-    if (myId && roomId)
+    if (myId && roomId) {
+      const { count } = await supabase
+        .from("players")
+        .select("*", { count: "exact", head: true })
+        .eq("room_id", roomId);
+      if (count <= 1) {
+        await supabase.from("rooms").delete().eq("id", roomId);
+      }
       await supabase
         .from("players")
         .delete()
         .eq("user_id", myId)
         .eq("room_id", roomId);
+    }
     localStorage.removeItem("citadelles_room_id");
     localStorage.removeItem("citadelles_player_id");
     setRoomId(null);
@@ -430,7 +444,57 @@ function App() {
     setShowLeaveModal(false);
   };
 
-  // --- HELPER DECK ---
+  useEffect(() => {
+    const handleBeforeUnload = async (e) => {
+      if (myId && roomId) {
+        const { count } = await supabase
+          .from("players")
+          .select("*", { count: "exact", head: true })
+          .eq("room_id", roomId);
+        if (count <= 1) supabase.from("rooms").delete().eq("id", roomId).then();
+        supabase
+          .from("players")
+          .delete()
+          .eq("user_id", myId)
+          .eq("room_id", roomId)
+          .then();
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    if (
+      gameStatus !== "waiting" &&
+      gameStatus !== "finished" &&
+      players.length === 1 &&
+      !loading
+    ) {
+      const timer = setTimeout(() => {
+        notify("Plus d'adversaires ! Retour au lobby...", "error");
+        backToLobby();
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+    const ghostInterval = setInterval(() => {
+      if (myId === roomHostId && players.length > 0 && onlineIds.length > 0) {
+        const ghosts = players.filter((p) => !onlineIds.includes(p.user_id));
+        if (ghosts.length > 0) {
+          ghosts.forEach((g) => {
+            if (g.user_id !== myId)
+              supabase
+                .from("players")
+                .delete()
+                .eq("user_id", g.user_id)
+                .eq("room_id", roomId)
+                .then();
+          });
+        }
+      }
+    }, 2000);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      clearInterval(ghostInterval);
+    };
+  }, [myId, roomId, roomHostId, players, onlineIds, gameStatus, loading]);
+
   const shuffle = (array) => {
     let i = array.length,
       r;
@@ -449,7 +513,13 @@ function App() {
     });
     return shuffle(deck);
   };
-
+  const removeOne = (arr, val) => {
+    const idx = arr.indexOf(val);
+    if (idx === -1) return arr;
+    const newArr = [...arr];
+    newArr.splice(idx, 1);
+    return newArr;
+  };
   const rebuildDeckIfNeeded = async (currentStack, neededCount) => {
     if (currentStack.length >= neededCount) return currentStack;
     const { data: allPlayers } = await supabase
@@ -472,26 +542,16 @@ function App() {
     }
     let discarded = [];
     DISTRICTS.forEach((card) => {
-      const totalExisting = card.qty || 1;
-      const currentlyInUse = countsInPlay[card.id] || 0;
-      const inDiscard = totalExisting - currentlyInUse;
-      for (let i = 0; i < inDiscard; i++) discarded.push(card.id);
+      const total = card.qty || 1;
+      const used = countsInPlay[card.id] || 0;
+      const inDisc = total - used;
+      for (let i = 0; i < inDisc; i++) discarded.push(card.id);
     });
     const newStack = [...currentStack, ...shuffle(discarded)];
     notify("La pioche a été reconstituée.", "info");
     return newStack;
   };
 
-  // --- HELPER ARRAY REMOVE ONE ITEM ---
-  const removeOne = (arr, val) => {
-    const idx = arr.indexOf(val);
-    if (idx === -1) return arr;
-    const newArr = [...arr];
-    newArr.splice(idx, 1);
-    return newArr;
-  };
-
-  // --- REALTIME ---
   useEffect(() => {
     if (!roomId) return;
     const fetchAll = async () => {
@@ -500,7 +560,8 @@ function App() {
         .select("*")
         .eq("room_id", roomId)
         .order("joined_at", { ascending: true });
-      if (ps) {
+      // FIX V110: Only kick if the players array is populated (not a glitch) and I am missing
+      if (ps && ps.length > 0) {
         setPlayers(ps);
         const amIHere = ps.find((p) => p.user_id === myId);
         if (myId && !amIHere) {
@@ -522,8 +583,24 @@ function App() {
         .eq("id", roomId)
         .single();
       if (r) {
-        if (r.king_player_id && r.king_player_id !== kingPlayerIdRef.current)
-          notify("Le Roi est mort, Vive le Roi !", "gold");
+        if (ps && ps.length > 0) {
+          const hostExists = ps.find((p) => p.user_id === r.host_id);
+          if (!hostExists) {
+            const newHost = ps[0];
+            if (newHost.user_id === myId) {
+              await supabase
+                .from("rooms")
+                .update({ host_id: newHost.user_id })
+                .eq("id", roomId);
+              notify("L'hôte a quitté. Vous êtes le nouvel hôte !", "gold");
+            }
+          }
+        }
+        if (r.king_player_id && r.king_player_id !== kingPlayerIdRef.current) {
+          if (kingPlayerIdRef.current !== null)
+            notify("Le Roi est mort, Vive le Roi !", "gold");
+          kingPlayerIdRef.current = r.king_player_id;
+        }
         if (r.killed_char_id && r.killed_char_id !== lastKilledRef.current) {
           const n = CHARACTERS.find((c) => c.id == r.killed_char_id)?.name;
           notify(`L'Assassin a tué ${n} !`, "error");
@@ -590,7 +667,6 @@ function App() {
     return () => supabase.removeChannel(channel);
   }, [roomId, myId]);
 
-  // --- LOGIQUE TOUR ---
   useEffect(() => {
     if (gameStatus !== "playing") return;
     setBuildsCount(0);
@@ -629,7 +705,6 @@ function App() {
       (me.characters || []).includes(currentTurnNumber) &&
       turnPhase === "resource"
     ) {
-      // SNAPSHOT REVENUS
       let targetColor =
         currentTurnNumber === 4
           ? "yellow"
@@ -734,6 +809,12 @@ function App() {
       .eq("code", roomCode)
       .single();
     if (r) {
+      if (r.status !== "waiting") {
+        return notify(
+          "Impossible de rejoindre : La partie a déjà commencé !",
+          "error",
+        );
+      }
       const { count } = await supabase
         .from("players")
         .select("*", { count: "exact", head: true })
@@ -797,7 +878,6 @@ function App() {
       })
       .eq("room_id", roomId);
   };
-
   const calculateScore = (p) => {
     let score = 0;
     const colors = new Set();
@@ -818,10 +898,15 @@ function App() {
     return score;
   };
 
-  // --- ACTIONS ---
+  // --- ACTIONS AVEC ANTI-SPAM (V110) ---
   const pickCharacter = async (cid) => {
+    if (isActionPending) return;
+    setIsActionPending(true);
     const me = players.find((p) => p.user_id === myId);
-    if ((me?.characters || []).includes(cid)) return;
+    if ((me?.characters || []).includes(cid)) {
+      setIsActionPending(false);
+      return;
+    }
     const count = players.length;
     let updateRoom = {};
     if (count === 2) {
@@ -874,8 +959,11 @@ function App() {
       else updateRoom = { draft_pile: remaining, current_player_index: next };
     }
     await supabase.from("rooms").update(updateRoom).eq("id", roomId);
+    setIsActionPending(false);
   };
   const takeGold = async () => {
+    if (isActionPending) return;
+    setIsActionPending(true);
     const me = players.find((p) => p.user_id === myId);
     await supabase
       .from("players")
@@ -887,8 +975,11 @@ function App() {
       .update({ current_turn_phase: "build" })
       .eq("id", roomId);
     setTurnPhase("build");
+    setIsActionPending(false);
   };
   const startDraw = async () => {
+    if (isActionPending) return;
+    setIsActionPending(true);
     const me = players.find((p) => p.user_id === myId);
     const { data: r } = await supabase
       .from("rooms")
@@ -903,6 +994,7 @@ function App() {
     s = await rebuildDeckIfNeeded(s, count);
     if (s.length < count) {
       notify("La pioche est épuisée !", "error");
+      setIsActionPending(false);
       return;
     }
     const opts = s.splice(0, count);
@@ -912,8 +1004,11 @@ function App() {
       .update({ district_stack: s, current_turn_phase: "drawing" })
       .eq("id", roomId);
     setTurnPhase("drawing");
+    setIsActionPending(false);
   };
   const pickDrawnCard = async (cid) => {
+    if (isActionPending) return;
+    setIsActionPending(true);
     const me = players.find((p) => p.user_id === myId);
     const hasLibrary = (me.city || []).some(
       (id) => DISTRICTS.find((d) => d.id == id)?.name === "Bibliothèque",
@@ -941,14 +1036,26 @@ function App() {
     setTurnPhase("build");
     if (hasLibrary)
       notify("Bibliothèque : Vous gardez toutes les cartes !", "success");
+    setIsActionPending(false);
   };
   const buildDistrict = async (cid) => {
+    if (isActionPending) return;
+    setIsActionPending(true);
     const me = playersRef.current.find((p) => p.user_id === myIdRef.current);
-    if (!me) return notify("Erreur sync", "error");
+    if (!me) {
+      setIsActionPending(false);
+      return notify("Erreur sync", "error");
+    }
     const c = DISTRICTS.find((d) => d.id == cid);
-    if (me.gold < c.cost) return notify("Pas assez d'or !", "error");
+    if (me.gold < c.cost) {
+      setIsActionPending(false);
+      return notify("Pas assez d'or !", "error");
+    }
     const limit = currentTurnNumber === 7 ? 3 : 1;
-    if (buildsCount >= limit) return notify("Limite atteinte !", "error");
+    if (buildsCount >= limit) {
+      setIsActionPending(false);
+      return notify("Limite atteinte !", "error");
+    }
     const newCity = [...(me.city || []), cid];
     const { error } = await supabase
       .from("players")
@@ -969,24 +1076,33 @@ function App() {
           .update({ first_builder_id: myId })
           .eq("id", roomId);
     }
+    setIsActionPending(false);
   };
   const destroyDistrict = async (targetPlayerId, districtId, cost) => {
+    if (isActionPending) return;
+    setIsActionPending(true);
     const me = players.find((p) => p.user_id === myId);
     const target = players.find((p) => p.user_id === targetPlayerId);
     const isBishop = (target.characters || []).includes(5);
-    if (isBishop && killedId !== 5)
+    if (isBishop && killedId !== 5) {
+      setIsActionPending(false);
       return notify("Impossible ! L'Évêque est protégé par l'Église.", "error");
+    }
     const hasGreatWall = (target.city || []).some(
       (id) => DISTRICTS.find((d) => d.id == id)?.name === "Grande Muraille",
     );
     const destCost = cost - 1 + (hasGreatWall ? 1 : 0);
-    if (me.gold < destCost)
+    if (me.gold < destCost) {
+      setIsActionPending(false);
       return notify(
         hasGreatWall ? "Grande Muraille : Coût +1 Or !" : "Pas assez d'or !",
         "error",
       );
-    if (DISTRICTS.find((d) => d.id == districtId)?.name === "Donjon")
+    }
+    if (DISTRICTS.find((d) => d.id == districtId)?.name === "Donjon") {
+      setIsActionPending(false);
       return notify("Le Donjon est indestructible !", "error");
+    }
     await supabase
       .from("players")
       .update({ gold: me.gold - destCost })
@@ -1000,8 +1116,11 @@ function App() {
     setWarMode(false);
     setAbilityUsed(true);
     notify("Quartier détruit !", "success");
+    setIsActionPending(false);
   };
   const useLab = async (cid) => {
+    if (isActionPending) return;
+    setIsActionPending(true);
     const me = players.find((p) => p.user_id === myId);
     await supabase
       .from("players")
@@ -1010,10 +1129,16 @@ function App() {
     setLabUsed(true);
     setShowLabModal(false);
     notify("Laboratoire : Carte transformée en Or.", "gold");
+    setIsActionPending(false);
   };
   const useSmithy = async () => {
+    if (isActionPending) return;
+    setIsActionPending(true);
     const me = players.find((p) => p.user_id === myId);
-    if (me.gold < 2) return notify("Pas assez d'or pour la Forge !", "error");
+    if (me.gold < 2) {
+      setIsActionPending(false);
+      return notify("Pas assez d'or pour la Forge !", "error");
+    }
     const { data: r } = await supabase
       .from("rooms")
       .select("district_stack")
@@ -1021,7 +1146,10 @@ function App() {
       .single();
     let s = r.district_stack || [];
     s = await rebuildDeckIfNeeded(s, 3);
-    if (s.length < 3) return notify("Pioche épuisée pour la Forge.", "error");
+    if (s.length < 3) {
+      setIsActionPending(false);
+      return notify("Pioche épuisée pour la Forge.", "error");
+    }
     const drawn = s.splice(0, 3);
     await supabase.from("rooms").update({ district_stack: s }).eq("id", roomId);
     await supabase
@@ -1030,8 +1158,11 @@ function App() {
       .eq("user_id", myId);
     setSmithyUsed(true);
     notify("Forge : 3 Cartes forgées !", "success");
+    setIsActionPending(false);
   };
   const magicianSwapPlayer = async (tid) => {
+    if (isActionPending) return;
+    setIsActionPending(true);
     const me = players.find((p) => p.user_id === myId);
     const target = players.find((p) => p.user_id === tid);
     await supabase
@@ -1047,9 +1178,15 @@ function App() {
     setMagicMode(null);
     setAbilityUsed(true);
     notify("Mains échangées !", "success");
+    setIsActionPending(false);
   };
   const magicianSwapDeck = async () => {
-    if (magicSelectedCards.length === 0) return;
+    if (isActionPending) return;
+    setIsActionPending(true);
+    if (magicSelectedCards.length === 0) {
+      setIsActionPending(false);
+      return;
+    }
     const me = players.find((p) => p.user_id === myId);
     const { data: r } = await supabase
       .from("rooms")
@@ -1058,11 +1195,13 @@ function App() {
       .single();
     let stack = r.district_stack || [];
     stack = await rebuildDeckIfNeeded(stack, magicSelectedCards.length);
-    if (stack.length < magicSelectedCards.length)
+    if (stack.length < magicSelectedCards.length) {
+      setIsActionPending(false);
       return notify(
         "Pas assez de cartes dans la pioche pour échanger.",
         "error",
       );
+    }
     const drawn = stack.splice(0, magicSelectedCards.length);
     await supabase
       .from("rooms")
@@ -1081,8 +1220,52 @@ function App() {
     setMagicSelectedCards([]);
     setAbilityUsed(true);
     notify(`${drawn.length} cartes échangées`, "success");
+    setIsActionPending(false);
   };
+  const thiefRob = async (tid) => {
+    if (isActionPending) return;
+    setIsActionPending(true);
+    const me = players.find((p) => p.user_id === myId);
+    if (me && (me.characters || []).includes(tid)) {
+      setIsActionPending(false);
+      return notify("Auto-vol interdit !", "error");
+    }
+    if (tid === killedId) {
+      setIsActionPending(false);
+      return notify("Déjà mort !", "error");
+    }
+    if (tid === 1) {
+      setIsActionPending(false);
+      return notify("Impossible !", "error");
+    }
+    await supabase
+      .from("rooms")
+      .update({ robbed_char_id: tid })
+      .eq("id", roomId);
+    notify("Vol confirmé.", "info");
+    setTurnPhase("resource");
+    setIsActionPending(false);
+  };
+  const assassinKill = async (tid) => {
+    if (isActionPending) return;
+    setIsActionPending(true);
+    const me = playersRef.current.find((p) => p.user_id === myIdRef.current);
+    if (me && (me.characters || []).includes(tid)) {
+      setIsActionPending(false);
+      return notify("Suicide interdit !", "error");
+    }
+    await supabase
+      .from("rooms")
+      .update({ killed_char_id: tid })
+      .eq("id", roomId);
+    notify("Cible marquée.", "error");
+    setTurnPhase("resource");
+    setIsActionPending(false);
+  };
+
   const endTurn = async () => {
+    if (isActionPending) return;
+    setIsActionPending(true);
     const me = players.find((p) => p.user_id === myId);
     await supabase
       .from("players")
@@ -1093,7 +1276,10 @@ function App() {
       .eq("room_id", roomId);
     forceNextTurn();
     setTurnPhase("resource");
+    setIsActionPending(false);
   };
+
+  // FIX STUCK GAME (Force Next > 8)
   const forceNextTurn = async () => {
     const next = currentTurnNumber + 1;
     if (next > 8) {
@@ -1101,18 +1287,19 @@ function App() {
         .from("players")
         .select("*")
         .eq("room_id", roomId);
-      if (ps.some((p) => (p.city || []).length >= 8))
+      if (ps.some((p) => (p.city || []).length >= 8)) {
         await supabase
           .from("rooms")
           .update({ status: "finished" })
           .eq("id", roomId);
-      else {
+      } else {
         const { data: r } = await supabase
           .from("rooms")
           .select("district_stack")
           .eq("id", roomId)
           .single();
         await prepareDraft(r.district_stack);
+        notify("Nouveau tour : Recrutement", "gold");
       }
     } else {
       await supabase
@@ -1142,7 +1329,7 @@ function App() {
       .from("rooms")
       .update({
         status: "drafting",
-        district_stack: stack,
+        district_stack: stack || [],
         draft_pile: c,
         face_down_char: fd.id,
         face_up_chars: fu,
@@ -1155,39 +1342,20 @@ function App() {
       })
       .eq("id", roomId);
   };
-
-  // FIX CRASH INCOME (Array vs Null)
-  const getIncomeAmount = () => {
-    const me = players.find((p) => p.user_id === myId);
-    if (!me) return 0;
-    let targetColor =
-      currentTurnNumber === 4
-        ? "yellow"
-        : currentTurnNumber === 5
-          ? "blue"
-          : currentTurnNumber === 6
-            ? "green"
-            : "red";
-    let amount = (me.city || []).filter((id) => {
-      const d = DISTRICTS.find((x) => x.id == id);
-      return d && (d.color === targetColor || d.name === "École de Magie");
-    }).length;
-    return amount;
-  };
   const collectCharacterIncome = async () => {
-    const amount = getIncomeAmount();
     const me = players.find((p) => p.user_id === myId);
-    if (amount > 0) {
+    if (turnStartIncome > 0) {
       await supabase
         .from("players")
-        .update({ gold: me.gold + amount })
+        .update({ gold: me.gold + turnStartIncome })
         .eq("user_id", myId);
-      notify(`Revenus : +${amount} Or`, "gold");
+      notify(`Revenus : +${turnStartIncome} Or`, "gold");
     }
     setIncomeCollected(true);
   };
 
-  if (loading) return <LoadingScreen onCancel={confirmLeaveGame} />;
+  if (loading)
+    return <LoadingScreen onCancel={confirmLeaveGame} onReset={fullReset} />;
 
   if (view === "login")
     return (
@@ -1281,13 +1449,18 @@ function App() {
               </div>
             ))}
           </div>
-          {myId === roomHostId && (
+          {myId === roomHostId && players.length >= 2 && (
             <button
               onClick={startGame}
               className="w-full mt-4 bg-green-900 hover:bg-green-800 text-green-100 p-5 rounded border-b-4 border-green-950 font-bold text-2xl uppercase shadow-lg tracking-[0.2em] transition-all"
             >
               Commencer
             </button>
+          )}
+          {myId === roomHostId && players.length < 2 && (
+            <div className="text-center text-stone-500 mt-4 italic text-sm">
+              En attente d'au moins un adversaire...
+            </div>
           )}
         </div>
         {showLeaveModal && (
@@ -1406,6 +1579,126 @@ function App() {
           Chargement du Royaume...
         </div>
       );
+
+    const opponentsRender = opponents.map((opp) => (
+      <div
+        key={opp.id}
+        className="min-w-[180px] h-[120px] bg-stone-800/50 rounded border-2 border-stone-700 p-2 flex flex-col gap-1 relative shadow-lg"
+      >
+        <div className="flex justify-between items-center border-b border-stone-700 pb-1">
+          <span className="font-bold text-amber-100 truncate max-w-[90px] text-sm tracking-wide">
+            {opp.pseudo}
+          </span>
+          <div className="flex gap-2 text-[10px]">
+            <span className="text-yellow-500 font-bold">💰{opp.gold}</span>
+            <span className="text-blue-400 font-bold">
+              🎴{(opp.hand || []).length}
+            </span>
+          </div>
+        </div>
+        <div className="flex-1 flex flex-wrap content-start gap-1 overflow-hidden bg-black/30 p-1 rounded inner-shadow">
+          {(opp.city || []).map((cid, i) => {
+            const c = DISTRICTS.find((d) => d.id == cid);
+            if (!c) return null;
+            const isBishop =
+              (opp.characters || []).includes(5) &&
+              !(opp.played_characters || []).includes(5);
+            const canDestroy =
+              warMode &&
+              currentTurnNumber === 8 &&
+              !isBishop &&
+              c.name !== "Donjon";
+            return (
+              <div
+                key={i}
+                onClick={() =>
+                  canDestroy && destroyDistrict(opp.user_id, cid, c.cost)
+                }
+                className={`w-5 h-7 rounded border ${canDestroy ? "cursor-crosshair animate-pulse border-red-500" : "bg-stone-700 border-stone-500"}`}
+                style={{
+                  backgroundColor: canDestroy
+                    ? undefined
+                    : c.color === "yellow"
+                      ? "#b45309"
+                      : c.color === "blue"
+                        ? "#0369a1"
+                        : c.color === "green"
+                          ? "#047857"
+                          : c.color === "red"
+                            ? "#b91c1c"
+                            : "#7e22ce",
+                }}
+                title={c.name}
+                onMouseEnter={(e) =>
+                  setTooltip({
+                    visible: true,
+                    x: e.clientX,
+                    y: e.clientY,
+                    name: c.name,
+                    cost: c.cost,
+                    desc: getCardDesc(c),
+                    color: c.color,
+                  })
+                }
+                onMouseLeave={() => setTooltip(null)}
+                onMouseMove={(e) =>
+                  setTooltip((p) =>
+                    p ? { ...p, x: e.clientX, y: e.clientY } : null,
+                  )
+                }
+              />
+            );
+          })}
+        </div>
+        {opp.user_id === kingPlayerId && (
+          <div className="absolute -top-2 -right-2 text-2xl drop-shadow-md">
+            👑
+          </div>
+        )}
+      </div>
+    ));
+
+    const myHandRender = (me.hand || []).map((hid, idx) => {
+      const total = (me.hand || []).length;
+      const center = (total - 1) / 2;
+      const dist = idx - center;
+      const rot = dist * 5;
+      const ty = Math.abs(dist) * 6;
+      const canBuild =
+        turnPhase === "build" &&
+        me.gold >= (DISTRICTS.find((d) => d.id === hid)?.cost || 0);
+      const isMagicSelected =
+        magicMode === "deck" && magicSelectedCards.includes(hid);
+      return (
+        <div
+          key={idx}
+          onClick={() =>
+            magicMode === "deck" &&
+            setMagicSelectedCards((p) =>
+              p.includes(hid) ? p.filter((x) => x !== hid) : [...p, hid],
+            )
+          }
+          className={`first:ml-0 -ml-16 transition-all duration-300 origin-bottom hover:z-[100] hover:-translate-y-24 hover:scale-105 hover:rotate-0 will-change-transform ${isMagicSelected ? "-translate-y-10 ring-4 ring-purple-500" : ""}`}
+          style={{
+            transform: isMagicSelected
+              ? "rotate(0)"
+              : `rotate(${rot}deg) translateY(${ty}px)`,
+          }}
+        >
+          <DistrictCard
+            id={hid}
+            onClick={() => canBuild && !magicMode && buildDistrict(hid)}
+            disabled={(!canBuild && !magicMode) || turnPhase !== "build"}
+            setTooltip={setTooltip}
+          />
+        </div>
+      );
+    });
+
+    const myCityRender = (me.city || []).map((cid, i) => (
+      <DistrictCard key={i} id={cid} small disabled setTooltip={setTooltip} />
+    ));
+
     const isMyDraftTurn =
       gameStatus === "drafting" &&
       players[currentPlayerIndex]?.user_id === myId;
@@ -1420,18 +1713,16 @@ function App() {
     const someoneHasActiveChar = players.some((p) =>
       (p.characters || []).includes(currentTurnNumber),
     );
-    // Wonder Flags
     const hasLab = (me.city || []).some(
       (id) => DISTRICTS.find((d) => d.id == id)?.name === "Laboratoire",
     );
     const hasSmithy = (me.city || []).some(
       (id) => DISTRICTS.find((d) => d.id == id)?.name === "Forge",
     );
-    const incomeAmount = getIncomeAmount(); // CALCUL AVANT LE RENDU
     const canCollectIncome =
       [4, 5, 6, 8].includes(currentTurnNumber) &&
       !incomeCollected &&
-      incomeAmount > 0; // CONDITION DE VISIBILITE
+      turnStartIncome > 0;
 
     return (
       <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#0c0a09] text-amber-50 select-none bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-stone-900 via-black to-black">
@@ -1471,12 +1762,10 @@ function App() {
             </p>
           </div>
         )}
-
-        {/* BOUTON SECOURS (PIOCE VIDE) */}
         {isMyCharTurn &&
           turnPhase === "drawing" &&
           drawOptions.length === 0 && (
-            <div className="absolute top-1/3 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 z-50">
+            <div className="absolute top-1/3 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 z-[100]">
               <div className="text-amber-500 font-bold animate-pulse text-xl">
                 Aucune carte à piocher !
               </div>
@@ -1488,7 +1777,6 @@ function App() {
               </button>
             </div>
           )}
-
         {showLabModal && (
           <div className="fixed inset-0 z-[9999] modal-overlay flex flex-col items-center justify-center p-8">
             <h3 className="text-4xl text-amber-500 font-bold mb-8 uppercase tracking-[0.2em] drop-shadow-lg">
@@ -1519,86 +1807,9 @@ function App() {
         )}
 
         <div className="h-[140px] shrink-0 bg-stone-900/90 border-b-4 border-stone-800 shadow-xl flex items-center px-4 gap-4 overflow-x-auto z-20 inner-shadow">
-          {opponents.map((opp) => (
-            <div
-              key={opp.id}
-              className="min-w-[180px] h-[120px] bg-stone-800/50 rounded border-2 border-stone-700 p-2 flex flex-col gap-1 relative shadow-lg"
-            >
-              <div className="flex justify-between items-center border-b border-stone-700 pb-1">
-                <span className="font-bold text-amber-100 truncate max-w-[90px] text-sm tracking-wide">
-                  {opp.pseudo}
-                </span>
-                <div className="flex gap-2 text-[10px]">
-                  <span className="text-yellow-500 font-bold">
-                    💰{opp.gold}
-                  </span>
-                  <span className="text-blue-400 font-bold">
-                    🎴{(opp.hand || []).length}
-                  </span>
-                </div>
-              </div>
-              <div className="flex-1 flex flex-wrap content-start gap-1 overflow-hidden bg-black/30 p-1 rounded inner-shadow">
-                {(opp.city || []).map((cid, i) => {
-                  const c = DISTRICTS.find((d) => d.id == cid);
-                  if (!c) return null;
-                  const isBishop =
-                    (opp.characters || []).includes(5) &&
-                    !(opp.played_characters || []).includes(5);
-                  const canDestroy =
-                    warMode &&
-                    currentTurnNumber === 8 &&
-                    !isBishop &&
-                    c.name !== "Donjon";
-                  return (
-                    <div
-                      key={i}
-                      onClick={() =>
-                        canDestroy && destroyDistrict(opp.user_id, cid, c.cost)
-                      }
-                      className={`w-5 h-7 rounded border ${canDestroy ? "cursor-crosshair animate-pulse border-red-500" : "bg-stone-700 border-stone-500"}`}
-                      style={{
-                        backgroundColor: canDestroy
-                          ? undefined
-                          : c.color === "yellow"
-                            ? "#b45309"
-                            : c.color === "blue"
-                              ? "#0369a1"
-                              : c.color === "green"
-                                ? "#047857"
-                                : c.color === "red"
-                                  ? "#b91c1c"
-                                  : "#7e22ce",
-                      }}
-                      title={c.name}
-                      onMouseEnter={(e) =>
-                        setTooltip({
-                          visible: true,
-                          x: e.clientX,
-                          y: e.clientY,
-                          name: c.name,
-                          cost: c.cost,
-                          desc: getCardDesc(c),
-                          color: c.color,
-                        })
-                      }
-                      onMouseLeave={() => setTooltip(null)}
-                      onMouseMove={(e) =>
-                        setTooltip((p) =>
-                          p ? { ...p, x: e.clientX, y: e.clientY } : null,
-                        )
-                      }
-                    />
-                  );
-                })}
-              </div>
-              {opp.user_id === kingPlayerId && (
-                <div className="absolute -top-2 -right-2 text-2xl drop-shadow-md">
-                  👑
-                </div>
-              )}
-            </div>
-          ))}
+          {opponentsRender}
         </div>
+
         <div className="flex-1 relative flex flex-col items-center justify-center p-2 overflow-hidden z-40">
           {isMyDraftTurn && (
             <div className="bg-stone-900/95 p-6 rounded-lg border-4 border-amber-800 shadow-[0_0_100px_rgba(0,0,0,1)] text-center z-50 animate-in fade-in zoom-in duration-300 max-h-full overflow-y-auto custom-scrollbar">
@@ -1644,7 +1855,7 @@ function App() {
                   <h2
                     className={`text-xl font-bold uppercase tracking-[0.2em] ${getCharColors(currentTurnNumber).text}`}
                   >
-                    {activeChar?.name}
+                    {activeChar?.name || "Inconnu"}
                   </h2>
                 </div>
                 {isDead && (
@@ -1653,20 +1864,23 @@ function App() {
                   </div>
                 )}
               </div>
-              {isKing && (!someoneHasActiveChar || isDead) && !isMyCharTurn && (
-                <div className="absolute right-4 top-1/2 -translate-y-1/2 animate-pulse">
-                  <button
-                    onClick={forceNextTurn}
-                    className="bg-stone-800 hover:bg-stone-700 text-stone-400 border border-stone-600 rounded p-4 text-xs font-bold uppercase tracking-widest shadow-lg"
-                  >
-                    Silence...
-                    <br />
-                    Appeler Suivant ⏩
-                  </button>
-                </div>
-              )}
+              {/* BOUTON DE SECOURS (Roi OU Hôte) */}
+              {(isKing || myId === roomHostId) &&
+                (!someoneHasActiveChar || isDead) &&
+                !isMyCharTurn && (
+                  <div className="absolute right-4 top-1/2 -translate-y-1/2 animate-pulse">
+                    <button
+                      onClick={forceNextTurn}
+                      className="bg-stone-800 hover:bg-stone-700 text-stone-400 border border-stone-600 rounded p-4 text-xs font-bold uppercase tracking-widest shadow-lg"
+                    >
+                      Silence...
+                      <br />
+                      Appeler Suivant ⏩
+                    </button>
+                  </div>
+                )}
               {isMyCharTurn && (
-                <div className="bg-[#1a1614] border-4 border-amber-700/50 p-6 rounded-lg max-w-2xl w-full shadow-2xl backdrop-blur-sm animate-in slide-in-from-bottom-5 fade-in duration-500 inner-shadow max-h-[calc(100vh-420px)] overflow-y-auto custom-scrollbar">
+                <div className="bg-[#1a1614] border-4 border-amber-700/50 p-6 rounded-lg max-w-2xl w-full shadow-2xl backdrop-blur-sm animate-in slide-in-from-bottom-5 fade-in duration-500 inner-shadow max-h-[calc(100vh-420px)] overflow-y-auto custom-scrollbar z-[60]">
                   <h3 className="text-xl text-center text-amber-100 mb-4 uppercase tracking-[0.3em] border-b-2 border-stone-800 pb-2">
                     Votre Tour, Messire
                   </h3>
@@ -1825,7 +2039,7 @@ function App() {
                             onClick={collectCharacterIncome}
                             className={`px-2 py-1 rounded text-[10px] border font-bold animate-pulse ${currentTurnNumber === 4 ? "bg-amber-700 border-amber-500 text-amber-100" : currentTurnNumber === 5 ? "bg-blue-800 border-blue-500 text-blue-100" : currentTurnNumber === 6 ? "bg-green-800 border-green-500 text-green-100" : "bg-red-800 border-red-500 text-red-100"}`}
                           >
-                            💰 Percevoir Revenus ({incomeAmount})
+                            💰 Percevoir Revenus ({turnStartIncome})
                           </button>
                         )}
                         {hasLab && !labUsed && (
@@ -1865,9 +2079,10 @@ function App() {
             </div>
           )}
         </div>
-        <div className="h-[250px] shrink-0 border-t-4 border-stone-800 bg-[#140f0c] shadow-[0_-20px_60px_rgba(0,0,0,0.9)] z-50 px-6 py-4 flex gap-6 items-end inner-shadow relative">
+
+        <div className="h-[250px] shrink-0 border-t-4 border-stone-800 bg-[#140f0c] shadow-[0_-20px_60px_rgba(0,0,0,0.9)] z-50 px-6 py-4 flex gap-6 items-end inner-shadow relative pointer-events-none">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_bottom,_var(--tw-gradient-stops))] from-amber-900/10 to-transparent pointer-events-none"></div>
-          <div className="w-64 h-full bg-stone-900/80 rounded-lg border-2 border-stone-700 p-4 flex flex-col gap-4 shadow-2xl relative z-10">
+          <div className="w-64 h-full bg-stone-900/80 rounded-lg border-2 border-stone-700 p-4 flex flex-col gap-4 shadow-2xl relative z-10 pointer-events-auto">
             <div className="bg-black/50 p-3 rounded border border-amber-900/50 flex justify-between items-center inner-shadow">
               <span className="text-stone-400 text-[10px] uppercase font-bold tracking-[0.2em]">
                 Trésor
@@ -1906,77 +2121,28 @@ function App() {
                     <span
                       className={`text-xs font-bold uppercase tracking-wide ${dead ? "line-through text-red-600Decoration-4" : "text-stone-100"}`}
                     >
-                      {char.name}
+                      {char?.name || "Inconnu"}
                     </span>
                   </div>
                 );
               })}
             </div>
           </div>
-          <div className="flex-1 h-full flex items-end justify-center pb-4 relative group z-20 perspective-1000">
+          <div className="flex-1 h-full flex items-end justify-center pb-4 relative group z-20 perspective-1000 pointer-events-auto">
             <div className="absolute bottom-0 text-[10px] text-stone-500 font-bold uppercase tracking-[0.4em] opacity-30 group-hover:opacity-0 transition-opacity pointer-events-none mb-1">
               Votre Main
             </div>
             <div className="flex justify-center items-end w-full h-full">
-              {(me.hand || []).map((hid, idx) => {
-                const total = (me.hand || []).length;
-                const center = (total - 1) / 2;
-                const dist = idx - center;
-                const rot = dist * 5;
-                const ty = Math.abs(dist) * 6;
-                const canBuild =
-                  turnPhase === "build" &&
-                  me.gold >= (DISTRICTS.find((d) => d.id === hid)?.cost || 0);
-                const isMagicSelected =
-                  magicMode === "deck" && magicSelectedCards.includes(hid);
-                return (
-                  <div
-                    key={idx}
-                    onClick={() =>
-                      magicMode === "deck" &&
-                      setMagicSelectedCards((p) =>
-                        p.includes(hid)
-                          ? p.filter((x) => x !== hid)
-                          : [...p, hid],
-                      )
-                    }
-                    className={`first:ml-0 -ml-16 transition-all duration-300 origin-bottom hover:z-[100] hover:-translate-y-24 hover:scale-105 hover:rotate-0 will-change-transform ${isMagicSelected ? "-translate-y-10 ring-4 ring-purple-500" : ""}`}
-                    style={{
-                      transform: isMagicSelected
-                        ? "rotate(0)"
-                        : `rotate(${rot}deg) translateY(${ty}px)`,
-                    }}
-                  >
-                    <DistrictCard
-                      id={hid}
-                      onClick={() =>
-                        canBuild && !magicMode && buildDistrict(hid)
-                      }
-                      disabled={
-                        (!canBuild && !magicMode) || turnPhase !== "build"
-                      }
-                      setTooltip={setTooltip}
-                    />
-                  </div>
-                );
-              })}
+              {myHandRender}
             </div>
           </div>
-          <div className="w-80 h-full bg-stone-900/80 rounded-lg border-2 border-stone-700 p-3 shadow-2xl flex flex-col relative overflow-hidden z-10">
+          <div className="w-80 h-full bg-stone-900/80 rounded-lg border-2 border-stone-700 p-3 shadow-2xl flex flex-col relative overflow-hidden z-10 pointer-events-auto">
             <div className="absolute top-0 inset-x-0 h-8 bg-gradient-to-b from-stone-900 via-stone-900/80 to-transparent z-10 pointer-events-none" />
             <h3 className="text-center text-xs text-stone-300 font-bold uppercase tracking-[0.3em] mb-3 pt-1 sticky top-0 z-20 drop-shadow-md">
               Votre Cité ({(me.city || []).length}/8)
             </h3>
             <div className="flex-1 overflow-y-auto flex flex-wrap content-start gap-2 pr-1 pb-2 custom-scrollbar bg-black/30 p-2 rounded inner-shadow">
-              {(me.city || []).map((cid, i) => (
-                <DistrictCard
-                  key={i}
-                  id={cid}
-                  small
-                  disabled
-                  setTooltip={setTooltip}
-                />
-              ))}
+              {myCityRender}
             </div>
           </div>
         </div>
