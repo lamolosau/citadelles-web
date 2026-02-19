@@ -43,18 +43,23 @@ const GameScreen = ({
   const [isActionPending, setIsActionPending] = useState(false);
   const [tooltip, setTooltip] = useState(null);
 
+  // --- REFS POUR ÉVITER LES BUGS DE DONNÉES FANTÔMES ---
   const myIdRef = useRef(myId);
   const playersRef = useRef(players);
   const kingPlayerIdRef = useRef(kingPlayerId);
+  const meRef = useRef(null);
+  const turnPhaseRef = useRef(turnPhase);
+
+  const opponents = players.filter((p) => p.user_id !== myId);
+  const me = players.find((p) => p.user_id === myId);
 
   useEffect(() => {
     myIdRef.current = myId;
     playersRef.current = players;
     kingPlayerIdRef.current = kingPlayerId;
-  }, [myId, players, kingPlayerId]);
-
-  const opponents = players.filter((p) => p.user_id !== myId);
-  const me = players.find((p) => p.user_id === myId);
+    meRef.current = me;
+    turnPhaseRef.current = turnPhase;
+  }, [myId, players, kingPlayerId, me, turnPhase]);
 
   // --- Helpers Locaux ---
   const shuffle = (array) => {
@@ -68,6 +73,7 @@ const GameScreen = ({
     }
     return n;
   };
+
   const removeOne = (arr, val) => {
     const idx = arr.indexOf(val);
     if (idx === -1) return arr;
@@ -139,7 +145,11 @@ const GameScreen = ({
       }, 2000);
     }
 
-    if (myId === roomHostId && Number(killedId) === Number(currentTurnNumber)) {
+    // Le ROI et l'HÔTE peuvent faire passer le tour du mort (sécurité)
+    if (
+      (myId === roomHostId || myId === kingPlayerIdRef.current) &&
+      Number(killedId) === Number(currentTurnNumber)
+    ) {
       const t = setTimeout(() => forceNextTurn(), 4000);
       return () => {
         clearTimeout(t);
@@ -147,10 +157,11 @@ const GameScreen = ({
       };
     }
 
+    const currentMe = meRef.current;
     if (
-      me &&
-      (me.characters || []).includes(Number(currentTurnNumber)) &&
-      turnPhase === "resource"
+      currentMe &&
+      (currentMe.characters || []).includes(Number(currentTurnNumber)) &&
+      turnPhaseRef.current === "resource"
     ) {
       let targetColor =
         Number(currentTurnNumber) === 4
@@ -160,7 +171,7 @@ const GameScreen = ({
             : Number(currentTurnNumber) === 6
               ? "green"
               : "red";
-      let amount = (me.city || []).filter((id) => {
+      let amount = (currentMe.city || []).filter((id) => {
         const d = DISTRICTS.find((x) => x.id == id);
         return d && (d.color === targetColor || d.name === "École de Magie");
       }).length;
@@ -170,9 +181,11 @@ const GameScreen = ({
         Number(robbedId) === Number(currentTurnNumber) &&
         Number(killedId) !== Number(currentTurnNumber)
       ) {
-        const thief = players.find((p) => (p.characters || []).includes(2));
-        if (thief && me.gold > 0) {
-          const goldAmount = me.gold;
+        const thief = playersRef.current.find((p) =>
+          (p.characters || []).includes(2),
+        );
+        if (thief && currentMe.gold > 0) {
+          const goldAmount = currentMe.gold;
           supabase
             .from("players")
             .update({ gold: 0 })
@@ -200,7 +213,7 @@ const GameScreen = ({
   // =========================================================================
 
   const applyRobberyIfNeeded = async () => {
-    let myCurrentGold = me.gold || 0;
+    let myCurrentGold = meRef.current?.gold || 0;
     if (
       Number(robbedId) === Number(currentTurnNumber) &&
       Number(killedId) !== Number(currentTurnNumber)
@@ -224,9 +237,8 @@ const GameScreen = ({
   const takeGold = async () => {
     if (isActionPending) return;
     setIsActionPending(true);
+    setTurnPhase("build"); // UI Optimiste
     try {
-      setTurnPhase("build");
-
       let baseGold = await applyRobberyIfNeeded();
       let goldToAdd = 2;
       let cardsToAdd = [];
@@ -246,29 +258,39 @@ const GameScreen = ({
         let stack = r.district_stack || [];
         stack = await rebuildDeckIfNeeded(stack, 2);
         cardsToAdd = stack.splice(0, 2);
-        await supabase
-          .from("rooms")
-          .update({ district_stack: stack })
-          .eq("id", roomId);
+
+        await Promise.all([
+          supabase
+            .from("rooms")
+            .update({ district_stack: stack, current_turn_phase: "build" })
+            .eq("id", roomId),
+          supabase
+            .from("players")
+            .update({
+              gold: baseGold + goldToAdd,
+              hand: [...(me.hand || []), ...cardsToAdd],
+            })
+            .eq("user_id", myId)
+            .eq("room_id", roomId),
+        ]);
         message += " et +2 Cartes (Architecte)";
+      } else {
+        await Promise.all([
+          supabase
+            .from("players")
+            .update({ gold: baseGold + goldToAdd })
+            .eq("user_id", myId)
+            .eq("room_id", roomId),
+          supabase
+            .from("rooms")
+            .update({ current_turn_phase: "build" })
+            .eq("id", roomId),
+        ]);
       }
-
-      await supabase
-        .from("players")
-        .update({
-          gold: baseGold + goldToAdd,
-          hand: [...(me.hand || []), ...cardsToAdd],
-        })
-        .eq("user_id", myId)
-        .eq("room_id", roomId);
-
-      await supabase
-        .from("rooms")
-        .update({ current_turn_phase: "build" })
-        .eq("id", roomId);
       notify(message, "gold");
     } catch (e) {
       console.error(e);
+      setTurnPhase("resource"); // Rollback UI
     } finally {
       setIsActionPending(false);
     }
@@ -277,9 +299,8 @@ const GameScreen = ({
   const startDraw = async () => {
     if (isActionPending) return;
     setIsActionPending(true);
+    setTurnPhase("drawing"); // UI Optimiste
     try {
-      setTurnPhase("drawing");
-
       let baseGold = await applyRobberyIfNeeded();
       let goldToAdd = 0;
 
@@ -323,6 +344,7 @@ const GameScreen = ({
         .eq("id", roomId);
     } catch (e) {
       console.error(e);
+      setTurnPhase("resource"); // Rollback UI
     } finally {
       setIsActionPending(false);
     }
@@ -331,10 +353,9 @@ const GameScreen = ({
   const pickDrawnCard = async (cid) => {
     if (isActionPending) return;
     setIsActionPending(true);
+    setTurnPhase("build"); // UI Optimiste
+    setDrawOptions([]);
     try {
-      setTurnPhase("build");
-      setDrawOptions([]);
-
       const hasLibrary = (me.city || []).some(
         (id) => DISTRICTS.find((d) => d.id == id)?.name === "Bibliothèque",
       );
@@ -357,18 +378,20 @@ const GameScreen = ({
         if (hasLibrary) notify("Bibliothèque : Vous gardez tout !", "success");
       }
 
-      await supabase
-        .from("rooms")
-        .update({
-          district_stack: [...stack, ...rejected],
-          current_turn_phase: "build",
-        })
-        .eq("id", roomId);
-      await supabase
-        .from("players")
-        .update({ hand: [...(me.hand || []), ...kept] })
-        .eq("user_id", myId)
-        .eq("room_id", roomId);
+      await Promise.all([
+        supabase
+          .from("rooms")
+          .update({
+            district_stack: [...stack, ...rejected],
+            current_turn_phase: "build",
+          })
+          .eq("id", roomId),
+        supabase
+          .from("players")
+          .update({ hand: [...(me.hand || []), ...kept] })
+          .eq("user_id", myId)
+          .eq("room_id", roomId),
+      ]);
     } catch (e) {
       console.error(e);
     } finally {
@@ -380,17 +403,13 @@ const GameScreen = ({
     if (isActionPending) return;
     setIsActionPending(true);
     try {
-      if ((me.characters || []).includes(tid)) {
-        setIsActionPending(false);
+      if ((me.characters || []).includes(tid))
         return notify("Suicide interdit !", "error");
-      }
       await supabase
         .from("rooms")
         .update({ killed_char_id: Number(tid) })
         .eq("id", roomId);
       notify("Cible éliminée.", "error");
-    } catch (e) {
-      console.error(e);
     } finally {
       setIsActionPending(false);
     }
@@ -400,33 +419,25 @@ const GameScreen = ({
     if (isActionPending) return;
     setIsActionPending(true);
     try {
-      if ((me.characters || []).includes(tid)) {
-        setIsActionPending(false);
+      if ((me.characters || []).includes(tid))
         return notify("Auto-vol interdit !", "error");
-      }
-      if (Number(tid) === Number(killedId)) {
-        setIsActionPending(false);
+      if (Number(tid) === Number(killedId))
         return notify("On ne vole pas un mort !", "error");
-      }
-      if (Number(tid) === 1) {
-        setIsActionPending(false);
+      if (Number(tid) === 1)
         return notify("Impossible de voler l'Assassin.", "error");
-      }
       await supabase
         .from("rooms")
         .update({ robbed_char_id: Number(tid) })
         .eq("id", roomId);
       notify("Cible marquée pour le vol.", "info");
-    } catch (e) {
-      console.error(e);
     } finally {
       setIsActionPending(false);
     }
   };
 
   const pickCharacter = async (cid) => {
-    const me = players.find((p) => p.user_id === myId);
-    if ((me?.characters || []).includes(cid)) return;
+    const currentMe = playersRef.current.find((p) => p.user_id === myId);
+    if ((currentMe?.characters || []).includes(cid)) return;
 
     const count = players.length;
     let updateRoom = {};
@@ -434,7 +445,7 @@ const GameScreen = ({
     if (count === 2) {
       const remaining = draftPile.filter((c) => c.id !== cid);
       if (draftSubStep === "pick") {
-        const newC = [...(me.characters || []), cid];
+        const newC = [...(currentMe.characters || []), cid];
         await supabase
           .from("players")
           .update({ characters: newC })
@@ -462,7 +473,7 @@ const GameScreen = ({
     } else {
       await supabase
         .from("players")
-        .update({ characters: [...(me.characters || []), cid] })
+        .update({ characters: [...(currentMe.characters || []), cid] })
         .eq("user_id", myId)
         .eq("room_id", roomId);
       const remaining = draftPile.filter((c) => c.id !== cid);
@@ -493,17 +504,12 @@ const GameScreen = ({
       const meCheck = playersRef.current.find(
         (p) => p.user_id === myIdRef.current,
       );
-      if (!meCheck) {
-        return notify("Erreur sync", "error");
-      }
+      if (!meCheck) return notify("Erreur sync", "error");
       const c = DISTRICTS.find((d) => d.id == cid);
-      if (meCheck.gold < c.cost) {
-        return notify("Pas assez d'or !", "error");
-      }
+      if (meCheck.gold < c.cost) return notify("Pas assez d'or !", "error");
       const limit = Number(currentTurnNumber) === 7 ? 3 : 1;
-      if (buildsCount >= limit) {
+      if (buildsCount >= limit)
         return notify("Limite de construction atteinte !", "error");
-      }
 
       const newCity = [...(meCheck.city || []), cid];
       const { error } = await supabase
@@ -526,8 +532,6 @@ const GameScreen = ({
             .update({ first_builder_id: myId })
             .eq("id", roomId);
       }
-    } catch (e) {
-      console.error(e);
     } finally {
       setIsActionPending(false);
     }
@@ -539,40 +543,37 @@ const GameScreen = ({
     try {
       const target = players.find((p) => p.user_id === targetPlayerId);
       const isBishop = (target.characters || []).includes(5);
-      if (isBishop && Number(killedId) !== 5) {
+      if (isBishop && Number(killedId) !== 5)
         return notify("L'Évêque est protégé par l'Église.", "error");
-      }
 
       const hasGreatWall = (target.city || []).some(
         (id) => DISTRICTS.find((d) => d.id == id)?.name === "Grande Muraille",
       );
       const destCost = cost - 1 + (hasGreatWall ? 1 : 0);
 
-      if (me.gold < destCost) {
+      if (me.gold < destCost)
         return notify(
           hasGreatWall ? "Grande Muraille : Coût +1 Or !" : "Pas assez d'or !",
           "error",
         );
-      }
-      if (DISTRICTS.find((d) => d.id == districtId)?.name === "Donjon") {
+      if (DISTRICTS.find((d) => d.id == districtId)?.name === "Donjon")
         return notify("Le Donjon est indestructible !", "error");
-      }
 
-      await supabase
-        .from("players")
-        .update({ gold: me.gold - destCost })
-        .eq("user_id", myId)
-        .eq("room_id", roomId);
-      await supabase
-        .from("players")
-        .update({ city: removeOne(target.city || [], districtId) })
-        .eq("user_id", targetPlayerId)
-        .eq("room_id", roomId);
+      await Promise.all([
+        supabase
+          .from("players")
+          .update({ gold: me.gold - destCost })
+          .eq("user_id", myId)
+          .eq("room_id", roomId),
+        supabase
+          .from("players")
+          .update({ city: removeOne(target.city || [], districtId) })
+          .eq("user_id", targetPlayerId)
+          .eq("room_id", roomId),
+      ]);
       setWarMode(false);
       setAbilityUsed(true);
       notify("Quartier détruit !", "success");
-    } catch (e) {
-      console.error(e);
     } finally {
       setIsActionPending(false);
     }
@@ -589,8 +590,6 @@ const GameScreen = ({
       setLabUsed(true);
       setShowLabModal(false);
       notify("Laboratoire : Carte transformée en 1 Or.", "gold");
-    } catch (e) {
-      console.error(e);
     } finally {
       setIsActionPending(false);
     }
@@ -600,9 +599,7 @@ const GameScreen = ({
     if (isActionPending) return;
     setIsActionPending(true);
     try {
-      if (me.gold < 2) {
-        return notify("Pas assez d'or pour la Forge !", "error");
-      }
+      if (me.gold < 2) return notify("Pas assez d'or pour la Forge !", "error");
       const { data: r } = await supabase
         .from("rooms")
         .select("district_stack")
@@ -610,23 +607,18 @@ const GameScreen = ({
         .single();
       let s = r.district_stack || [];
       s = await rebuildDeckIfNeeded(s, 3);
-      if (s.length < 3) {
-        return notify("Pioche épuisée pour la Forge.", "error");
-      }
+      if (s.length < 3) return notify("Pioche épuisée pour la Forge.", "error");
 
       const drawn = s.splice(0, 3);
-      await supabase
-        .from("rooms")
-        .update({ district_stack: s })
-        .eq("id", roomId);
-      await supabase
-        .from("players")
-        .update({ hand: [...(me.hand || []), ...drawn], gold: me.gold - 2 })
-        .eq("user_id", myId);
+      await Promise.all([
+        supabase.from("rooms").update({ district_stack: s }).eq("id", roomId),
+        supabase
+          .from("players")
+          .update({ hand: [...(me.hand || []), ...drawn], gold: me.gold - 2 })
+          .eq("user_id", myId),
+      ]);
       setSmithyUsed(true);
       notify("Forge : 3 Cartes forgées !", "success");
-    } catch (e) {
-      console.error(e);
     } finally {
       setIsActionPending(false);
     }
@@ -637,21 +629,21 @@ const GameScreen = ({
     setIsActionPending(true);
     try {
       const target = players.find((p) => p.user_id === tid);
-      await supabase
-        .from("players")
-        .update({ hand: target.hand || [] })
-        .eq("user_id", myId)
-        .eq("room_id", roomId);
-      await supabase
-        .from("players")
-        .update({ hand: me.hand || [] })
-        .eq("user_id", tid)
-        .eq("room_id", roomId);
+      await Promise.all([
+        supabase
+          .from("players")
+          .update({ hand: target.hand || [] })
+          .eq("user_id", myId)
+          .eq("room_id", roomId),
+        supabase
+          .from("players")
+          .update({ hand: me.hand || [] })
+          .eq("user_id", tid)
+          .eq("room_id", roomId),
+      ]);
       setMagicMode(null);
       setAbilityUsed(true);
       notify("Mains échangées !", "success");
-    } catch (e) {
-      console.error(e);
     } finally {
       setIsActionPending(false);
     }
@@ -661,9 +653,7 @@ const GameScreen = ({
     if (isActionPending) return;
     setIsActionPending(true);
     try {
-      if (magicSelectedCards.length === 0) {
-        return;
-      }
+      if (magicSelectedCards.length === 0) return;
       const { data: r } = await supabase
         .from("rooms")
         .select("district_stack")
@@ -671,35 +661,31 @@ const GameScreen = ({
         .single();
       let stack = r.district_stack || [];
       stack = await rebuildDeckIfNeeded(stack, magicSelectedCards.length);
-      if (stack.length < magicSelectedCards.length) {
-        return notify(
-          "Pas assez de cartes dans la pioche pour échanger.",
-          "error",
-        );
-      }
+      if (stack.length < magicSelectedCards.length)
+        return notify("Pas assez de cartes dans la pioche.", "error");
 
       const drawn = stack.splice(0, magicSelectedCards.length);
-      await supabase
-        .from("rooms")
-        .update({ district_stack: [...stack, ...magicSelectedCards] })
-        .eq("id", roomId);
-
       let newHand = [...(me.hand || [])];
       magicSelectedCards.forEach((c) => {
         newHand = removeOne(newHand, c);
       });
-      await supabase
-        .from("players")
-        .update({ hand: [...newHand, ...drawn] })
-        .eq("user_id", myId)
-        .eq("room_id", roomId);
+
+      await Promise.all([
+        supabase
+          .from("rooms")
+          .update({ district_stack: [...stack, ...magicSelectedCards] })
+          .eq("id", roomId),
+        supabase
+          .from("players")
+          .update({ hand: [...newHand, ...drawn] })
+          .eq("user_id", myId)
+          .eq("room_id", roomId),
+      ]);
 
       setMagicMode(null);
       setMagicSelectedCards([]);
       setAbilityUsed(true);
       notify(`${drawn.length} cartes échangées`, "success");
-    } catch (e) {
-      console.error(e);
     } finally {
       setIsActionPending(false);
     }
@@ -708,7 +694,7 @@ const GameScreen = ({
   // --- PASSAGE DE TOUR BLINDÉ ---
   const forceNextTurn = async () => {
     try {
-      // FORCER LA CONVERSION EN NOMBRE ICI (ÉVITE LE "8" + 1 = "81")
+      setTurnPhase("resource"); // UI Optimiste immédiate
       const nextTurn = Number(currentTurnNumber) + 1;
 
       if (nextTurn > 8) {
@@ -739,10 +725,7 @@ const GameScreen = ({
           })
           .eq("id", roomId);
 
-        if (error) {
-          console.error("Erreur update tour:", error);
-          notify("Erreur lors du passage au tour suivant", "error");
-        }
+        if (error) notify("Erreur lors du passage au tour suivant", "error");
       }
     } catch (e) {
       console.error("Erreur forceNextTurn:", e);
@@ -752,19 +735,21 @@ const GameScreen = ({
   const endTurn = async () => {
     if (isActionPending) return;
     setIsActionPending(true);
+    setTurnPhase("resource"); // UI Optimiste immédiate
     try {
-      setTurnPhase("resource"); // MAJ UI locale immédiate
-      await supabase
-        .from("players")
-        .update({
-          played_characters: [
-            ...(me.played_characters || []),
-            Number(currentTurnNumber),
-          ],
-        })
-        .eq("user_id", myId)
-        .eq("room_id", roomId);
-      await forceNextTurn();
+      await Promise.all([
+        supabase
+          .from("players")
+          .update({
+            played_characters: [
+              ...(me.played_characters || []),
+              Number(currentTurnNumber),
+            ],
+          })
+          .eq("user_id", myId)
+          .eq("room_id", roomId),
+        forceNextTurn(),
+      ]);
     } catch (e) {
       console.error(e);
     } finally {
@@ -829,7 +814,6 @@ const GameScreen = ({
     !(me?.played_characters || []).includes(Number(currentTurnNumber)) &&
     !isDead;
 
-  // CONDITIONS POUR LE BOUTON MAITRE DU JEU (Roi ou Hôte)
   const isKing = myId === kingPlayerId;
   const someoneHasActiveChar = players.some(
     (p) =>
@@ -837,11 +821,11 @@ const GameScreen = ({
       !(p.played_characters || []).includes(Number(currentTurnNumber)),
   );
 
-  // Le roi/hôte peut FORCER le passage s'il le veut (sauf si c'est son propre tour en cours de jeu).
+  // Sécurité anti-blocage : le roi ou l'hôte peut toujours skipper si c'est coincé !
   const canForceSkip =
     (isKing || myId === roomHostId) &&
     gameStatus === "playing" &&
-    !isMyCharTurn;
+    (!isMyCharTurn || isDead);
 
   const hasLab = (me?.city || []).some(
     (id) => DISTRICTS.find((d) => d.id == id)?.name === "Laboratoire",
@@ -867,8 +851,8 @@ const GameScreen = ({
 
       {tooltip && (
         <div
-          className="fixed bg-black/95 border-2 border-amber-600 p-4 rounded text-amber-50 max-w-xs tooltip shadow-2xl"
-          style={{ top: tooltip.y + 10, left: tooltip.x + 10 }}
+          className="fixed bg-black/95 border-2 border-amber-600 p-4 rounded text-amber-50 max-w-xs tooltip shadow-2xl pointer-events-none"
+          style={{ top: tooltip.y + 10, left: tooltip.x + 10, zIndex: 99999 }}
         >
           <h4 className="font-bold uppercase tracking-widest text-amber-500 mb-1">
             {tooltip.name}
@@ -988,24 +972,19 @@ const GameScreen = ({
                                 ? "#b91c1c"
                                 : "#7e22ce",
                     }}
-                    title={c.name}
-                    onMouseEnter={(e) =>
+                    onMouseEnter={(e) => {
+                      const rect = e.target.getBoundingClientRect();
                       setTooltip({
                         visible: true,
-                        x: e.clientX,
-                        y: e.clientY,
+                        x: rect.left,
+                        y: rect.bottom + 5,
                         name: c.name,
                         cost: c.cost,
                         desc: getCardDesc(c),
                         color: c.color,
-                      })
-                    }
+                      });
+                    }}
                     onMouseLeave={() => setTooltip(null)}
-                    onMouseMove={(e) =>
-                      setTooltip((p) =>
-                        p ? { ...p, x: e.clientX, y: e.clientY } : null,
-                      )
-                    }
                   />
                 );
               })}
@@ -1081,7 +1060,7 @@ const GameScreen = ({
               )}
             </div>
 
-            {/* BOUTON MAITRE DU JEU (ROI OU HOTE) - FORCE Z-INDEX POUR ÊTRE CLIQUABLE */}
+            {/* BOUTON MAITRE DU JEU */}
             {canForceSkip && (
               <div className="absolute right-4 top-1/2 -translate-y-1/2 z-[9999] pointer-events-auto">
                 <button
@@ -1111,7 +1090,7 @@ const GameScreen = ({
                   Votre Tour, Messire
                 </h3>
 
-                {/* POUVOIRS (Assassin, Voleur, Magicien) */}
+                {/* POUVOIRS */}
                 {Number(currentTurnNumber) === 1 && !killedId && (
                   <div className="mb-4 bg-red-950/40 p-3 rounded border-red-900/50 text-center">
                     <p className="text-[10px] font-bold text-red-500 uppercase mb-2">
@@ -1197,8 +1176,6 @@ const GameScreen = ({
                       </button>
                     </div>
                   )}
-
-                {/* CONDOTTIERE */}
                 {Number(currentTurnNumber) === 8 &&
                   !warMode &&
                   !abilityUsed && (
