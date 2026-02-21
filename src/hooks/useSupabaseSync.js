@@ -63,6 +63,7 @@ export const useSupabaseSync = ({
   rebuildDeckIfNeeded,
   forceNextTurn,
   channelRef,
+  setActiveAnimation,
 }) => {
   useEffect(() => {
     if (!hasSavedSession) {
@@ -316,10 +317,17 @@ export const useSupabaseSync = ({
         notify(payload.message, payload.type);
       })
       // ⚡ NOUVEAU : On écoute les actions invisibles pour changer d'écran instantanément
+      // ⚡ On écoute les actions invisibles pour changer d'écran instantanément
       .on("broadcast", { event: "sync_action" }, ({ payload }) => {
         if (payload.action === "next_turn") {
           setCurrentTurnNumber(payload.turn);
           setTurnPhase("resource");
+        }
+        // ⚡ NOUVEAU : On écoute les déclencheurs d'animation !
+        if (payload.action === "play_animation") {
+          setActiveAnimation(payload.data);
+          // On efface l'animation de l'écran après 2.5 secondes
+          setTimeout(() => setActiveAnimation(null), 2500);
         }
       })
       .on(

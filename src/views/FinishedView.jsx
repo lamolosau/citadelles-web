@@ -1,5 +1,7 @@
 import { GLOBAL_STYLES } from "../utils/theme";
 import { calculateScore } from "../utils/gameLogic";
+import { useEffect } from "react";
+import { playCrossfadeLoop } from "../utils/soundManager";
 
 // ==========================================
 // VUE : FinishedView
@@ -12,6 +14,17 @@ const FinishedView = ({
   backToLobby,
   firstBuilderId,
 }) => {
+  useEffect(() => {
+    // Lance "winloop.mp3", avec un volume max de 0.4, et un fondu de 2 secondes (2000 ms)
+    const victoryMusic = playCrossfadeLoop("winloop.mp3", 0.4, 2000);
+
+    // Nettoyage si on quitte la page
+    return () => {
+      if (victoryMusic) {
+        victoryMusic.stop(); // ⚡ Coupe les deux platines en même temps
+      }
+    };
+  }, []);
   // On trie les joueurs du plus grand score au plus petit
   // On passe `firstBuilderId` à la fonction pour qu'elle sache qui a fini en premier
   const sortedPlayers = [...players].sort(

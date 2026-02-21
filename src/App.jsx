@@ -73,6 +73,7 @@ function App() {
   const [showLeaveModal, setShowLeaveModal] = useState(false);
   const [playerToKickId, setPlayerToKickId] = useState(null);
   const [isActionPending, setIsActionPending] = useState(false);
+  const [activeAnimation, setActiveAnimation] = useState(null); // ⚡ NOUVEAU : Gère les animations visuelles
 
   // ----------------------------------------
   // 2. RÉFÉRENCES MUTABLES (Pour les effets)
@@ -195,6 +196,9 @@ function App() {
     notify,
     broadcastNotify,
     broadcastAction,
+    setActiveAnimation,
+    gameStatus,
+    setGameStatus,
   });
 
   // Hook de Synchronisation Supabase (Temps réel & Événements)
@@ -256,6 +260,7 @@ function App() {
     rebuildDeckIfNeeded: actions.rebuildDeckIfNeeded,
     forceNextTurn: actions.forceNextTurn,
     channelRef,
+    setActiveAnimation,
   });
 
   // ----------------------------------------
@@ -362,6 +367,7 @@ function App() {
         collectCharacterIncome={actions.collectCharacterIncome}
         endTurn={actions.endTurn}
         forceNextTurn={actions.forceNextTurn}
+        activeAnimation={activeAnimation}
       />
     );
   }
