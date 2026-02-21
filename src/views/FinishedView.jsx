@@ -1,41 +1,22 @@
-import React from "react";
-import { GLOBAL_STYLES, DISTRICTS } from "../data/constants";
+import { GLOBAL_STYLES } from "../utils/theme";
+import { calculateScore } from "../utils/gameLogic";
 
-const EndScreen = ({
+// ==========================================
+// VUE : FinishedView
+// ==========================================
+
+const FinishedView = ({
   players,
   myId,
   roomHostId,
   backToLobby,
   firstBuilderId,
 }) => {
-  const calculateScore = (p) => {
-    let score = 0;
-    const colors = new Set();
-    const hasHauntedCity = (p.city || []).some(
-      (id) =>
-        (DISTRICTS.find((d) => d.id == id)?.name || "") === "Cour des Miracles",
-    );
-
-    (p.city || []).forEach((id) => {
-      const c = DISTRICTS.find((d) => d.id == id);
-      if (c) {
-        score += c.cost;
-        colors.add(c.color);
-      }
-    });
-
-    // Bonus de couleurs (5 couleurs)
-    if (colors.size >= 5 || (hasHauntedCity && colors.size === 4)) score += 3;
-
-    // Bonus premier bâtisseur
-    if (p.user_id === firstBuilderId) score += 4;
-    else if ((p.city || []).length >= 8) score += 2;
-
-    return score;
-  };
-
+  // On trie les joueurs du plus grand score au plus petit
+  // On passe `firstBuilderId` à la fonction pour qu'elle sache qui a fini en premier
   const sortedPlayers = [...players].sort(
-    (a, b) => calculateScore(b) - calculateScore(a),
+    (a, b) =>
+      calculateScore(b, firstBuilderId) - calculateScore(a, firstBuilderId),
   );
 
   return (
@@ -57,19 +38,21 @@ const EndScreen = ({
             >
               <div className="flex items-center gap-4">
                 <span
-                  className={`text-4xl font-bold ${i === 0 ? "text-amber-400" : "text-stone-500"}`}
+                  className={`text-4xl font-bold ${
+                    i === 0 ? "text-amber-400" : "text-stone-500"
+                  }`}
                 >
                   #{i + 1}
                 </span>
                 <div className="flex flex-col">
                   <span className="text-2xl font-bold">{p.pseudo}</span>
                   <span className="text-xs text-stone-400">
-                    {p.city.length} quartiers bâtis
+                    {p.city?.length || 0} quartiers bâtis
                   </span>
                 </div>
               </div>
               <span className="text-4xl font-black text-amber-100">
-                {calculateScore(p)} pts
+                {calculateScore(p, firstBuilderId)} pts
               </span>
             </div>
           ))}
@@ -87,4 +70,4 @@ const EndScreen = ({
   );
 };
 
-export default EndScreen;
+export default FinishedView;

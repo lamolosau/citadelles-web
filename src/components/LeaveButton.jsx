@@ -1,4 +1,6 @@
-import React from "react";
+// ==========================================
+// COMPOSANT : LeaveButton
+// ==========================================
 
 const LeaveButton = ({ onClick }) => (
   <button

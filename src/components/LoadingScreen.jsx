@@ -1,5 +1,8 @@
-import React from "react";
-import { GLOBAL_STYLES } from "../data/constants";
+import { GLOBAL_STYLES } from "../utils/theme";
+
+// ==========================================
+// COMPOSANT : LoadingScreen
+// ==========================================
 
 const LoadingScreen = ({ onCancel, onReset }) => (
   <div className="h-screen w-screen bg-black flex flex-col items-center justify-center text-amber-600 font-family-medieval relative">

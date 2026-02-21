@@ -1,4 +1,6 @@
-import React from "react";
+// ==========================================
+// COMPOSANT : NotificationBanner
+// ==========================================
 
 const NotificationBanner = ({ message, type }) => {
   if (!message) return null;

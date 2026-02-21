@@ -1,27 +1,24 @@
-import React, { useState } from "react";
-import { GLOBAL_STYLES } from "../data/constants";
+import { GLOBAL_STYLES } from "../utils/theme";
 import LeaveButton from "../components/LeaveButton";
 
-const LobbyScreen = ({
+// ==========================================
+// VUE : LobbyView
+// ==========================================
+
+const LobbyView = ({
+  setShowLeaveModal,
   roomCode,
   players,
   onlineIds,
-  myId,
   roomHostId,
+  myId,
+  setPlayerToKickId,
   startGame,
-  kickPlayer,
+  showLeaveModal,
   confirmLeaveGame,
+  playerToKickId,
+  confirmKick,
 }) => {
-  const [showLeaveModal, setShowLeaveModal] = useState(false);
-  const [playerToKickId, setPlayerToKickId] = useState(null);
-
-  const confirmKick = () => {
-    if (playerToKickId) {
-      kickPlayer(playerToKickId);
-      setPlayerToKickId(null);
-    }
-  };
-
   return (
     <div className="min-h-screen flex flex-col items-center p-10 bg-gradient-to-b from-stone-900 to-black text-amber-50 relative">
       <style>{GLOBAL_STYLES}</style>
@@ -48,11 +45,7 @@ const LobbyScreen = ({
             >
               <div className="flex items-center gap-3">
                 <div
-                  className={`w-3 h-3 rounded-full ${
-                    onlineIds.includes(p.user_id)
-                      ? "bg-green-500 shadow-[0_0_10px_#22c55e]"
-                      : "bg-stone-600"
-                  }`}
+                  className={`w-3 h-3 rounded-full ${onlineIds.includes(p.user_id) ? "bg-green-500 shadow-[0_0_10px_#22c55e]" : "bg-stone-600"}`}
                 />
                 <span className="text-xl font-bold tracking-wide">
                   {p.pseudo}
@@ -70,7 +63,7 @@ const LobbyScreen = ({
                     className="w-6 h-6 flex items-center justify-center bg-red-900/50 text-red-500 border border-red-800 rounded hover:bg-red-800 hover:text-red-200 transition-colors"
                     title="Exclure"
                   >
-                    ✕
+                    ✖
                   </button>
                 )}
               </div>
@@ -92,7 +85,6 @@ const LobbyScreen = ({
         )}
       </div>
 
-      {/* MODAL QUITTER */}
       {showLeaveModal && (
         <div className="fixed inset-0 z-[10000] modal-overlay flex items-center justify-center">
           <div className="bg-stone-900 border-4 border-red-600 p-6 rounded-lg text-center shadow-2xl max-w-sm">
@@ -120,7 +112,6 @@ const LobbyScreen = ({
         </div>
       )}
 
-      {/* MODAL KICK */}
       {playerToKickId && (
         <div className="fixed inset-0 z-[10000] modal-overlay flex items-center justify-center">
           <div className="bg-stone-900 border-4 border-red-600 p-6 rounded-lg text-center shadow-2xl max-w-sm">
@@ -155,4 +146,4 @@ const LobbyScreen = ({
   );
 };
 
-export default LobbyScreen;
+export default LobbyView;

@@ -1,5 +1,8 @@
-import React from "react";
-import { DISTRICTS, getCardDesc } from "../data/constants";
+import { DISTRICTS, getCardDesc } from "../data/gameData";
+
+// ==========================================
+// COMPOSANT : DistrictCard
+// ==========================================
 
 const DistrictCard = ({
   id,
@@ -17,6 +20,7 @@ const DistrictCard = ({
     bg: "bg-purple-950",
     text: "text-purple-300",
   };
+
   if (c.color === "yellow")
     colors = {
       border: "border-amber-500",
@@ -53,7 +57,9 @@ const DistrictCard = ({
       desc: getCardDesc(c),
       color: c.color,
     });
+
   const handleLeave = () => setTooltip && setTooltip(null);
+
   const handleMove = (e) =>
     setTooltip &&
     setTooltip((prev) =>
