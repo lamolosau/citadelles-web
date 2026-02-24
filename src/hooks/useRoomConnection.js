@@ -1,27 +1,25 @@
 import { CHARACTERS } from "../data/gameData";
 import { shuffle, generateFullDeck } from "../utils/gameLogic";
 
-// ==========================================
-// HOOK : Connexion et Gestion de la Salle
-// ==========================================
+export const useRoomConnection = (props) => {
+  const {
+    supabase,
+    pseudo,
+    roomCode,
+    roomId,
+    myId,
+    setMyId,
+    setRoomId,
+    setRoomCode,
+    setView,
+    setLoading,
+    setPlayers,
+    setShowLeaveModal,
+    playerToKickId,
+    setPlayerToKickId,
+    notify,
+  } = props;
 
-export const useRoomConnection = ({
-  supabase,
-  pseudo,
-  roomCode,
-  roomId,
-  myId,
-  setMyId,
-  setRoomId,
-  setRoomCode,
-  setView,
-  setLoading,
-  setPlayers,
-  setShowLeaveModal,
-  playerToKickId,
-  setPlayerToKickId,
-  notify,
-}) => {
   const getUserId = async () => {
     const { data } = await supabase.auth.getSession();
     return (
@@ -34,11 +32,13 @@ export const useRoomConnection = ({
     if (!pseudo) return;
     const u = await getUserId();
     const c = Math.random().toString(36).substring(2, 6).toUpperCase();
+
     const { data: r } = await supabase
       .from("rooms")
       .insert([{ code: c, host_id: u, king_player_id: u }])
       .select()
       .single();
+
     await supabase
       .from("players")
       .insert([{ room_id: r.id, user_id: u, pseudo, gold: 2 }]);
@@ -61,12 +61,12 @@ export const useRoomConnection = ({
       .single();
 
     if (r) {
-      if (r.status !== "waiting") {
+      if (r.status !== "waiting")
         return notify(
           "Impossible de rejoindre : La partie a déjà commencé !",
           "error",
         );
-      }
+
       const { count } = await supabase
         .from("players")
         .select("*", { count: "exact", head: true })
@@ -95,13 +95,15 @@ export const useRoomConnection = ({
       .order("joined_at", { ascending: true });
 
     const d = generateFullDeck();
-    for (const p of latestPlayers) {
-      await supabase
+
+    const dealPromises = latestPlayers.map((p) =>
+      supabase
         .from("players")
         .update({ hand: d.splice(0, 4) })
         .eq("user_id", p.user_id)
-        .eq("room_id", roomId);
-    }
+        .eq("room_id", roomId),
+    );
+    await Promise.all(dealPromises);
 
     const pc = latestPlayers.length;
     let c = shuffle([...CHARACTERS]);
@@ -123,20 +125,22 @@ export const useRoomConnection = ({
   };
 
   const backToLobby = async () => {
-    await supabase
-      .from("rooms")
-      .update({ status: "waiting", first_builder_id: null })
-      .eq("id", roomId);
-    await supabase
-      .from("players")
-      .update({
-        city: [],
-        hand: [],
-        gold: 2,
-        characters: [],
-        played_characters: [],
-      })
-      .eq("room_id", roomId);
+    await Promise.all([
+      supabase
+        .from("rooms")
+        .update({ status: "waiting", first_builder_id: null })
+        .eq("id", roomId),
+      supabase
+        .from("players")
+        .update({
+          city: [],
+          hand: [],
+          gold: 2,
+          characters: [],
+          played_characters: [],
+        })
+        .eq("room_id", roomId),
+    ]);
   };
 
   const kickPlayer = async (userId) => {
@@ -158,15 +162,14 @@ export const useRoomConnection = ({
         .from("players")
         .select("*", { count: "exact", head: true })
         .eq("room_id", roomId);
-      if (count <= 1) {
-        await supabase.from("rooms").delete().eq("id", roomId);
-      }
+      if (count <= 1) await supabase.from("rooms").delete().eq("id", roomId);
       await supabase
         .from("players")
         .delete()
         .eq("user_id", myId)
         .eq("room_id", roomId);
     }
+
     localStorage.removeItem("citadelles_room_id");
     localStorage.removeItem("citadelles_player_id");
     setRoomId(null);

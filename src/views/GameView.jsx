@@ -5,87 +5,82 @@ import { CHARACTERS, DISTRICTS, getCardDesc } from "../data/gameData";
 import NotificationBanner from "../components/NotificationBanner";
 import DistrictCard from "../components/DistrictCard";
 
-// ==========================================
-// VUE : GameView
-// ==========================================
+const charMap = CHARACTERS.reduce((acc, c) => ({ ...acc, [c.id]: c }), {});
+const districtMap = DISTRICTS.reduce((acc, d) => ({ ...acc, [d.id]: d }), {});
 
-const GameView = ({
-  players,
-  myId,
-  opponents,
-  notification,
-  tooltip,
-  setTooltip,
-  showLabModal,
-  setShowLabModal,
-  turnPhase,
-  setTurnPhase,
-  magicMode,
-  setMagicMode,
-  magicSelectedCards,
-  setMagicSelectedCards,
-  drawOptions,
-  gameStatus,
-  currentPlayerIndex,
-  draftPile,
-  draftSubStep,
-  pickCharacter,
-  currentTurnNumber,
-  killedId,
-  roomHostId,
-  forceNextTurn,
-  abilityUsed,
-  magicianSwapPlayer,
-  magicianSwapDeck,
-  takeGold,
-  startDraw,
-  pickDrawnCard,
-  assassinKill,
-  robbedId,
-  thiefRob,
-  warMode,
-  setWarMode,
-  turnStartIncome,
-  incomeCollected,
-  collectCharacterIncome,
-  labUsed,
-  smithyUsed,
-  useSmithy,
-  endTurn,
-  buildDistrict,
-  destroyDistrict,
-  kingPlayerId,
-  useLab,
-  activeAnimation,
-  quitGame,
-}) => {
+const GameView = (props) => {
+  const {
+    players,
+    myId,
+    opponents,
+    notification,
+    tooltip,
+    setTooltip,
+    showLabModal,
+    setShowLabModal,
+    turnPhase,
+    setTurnPhase,
+    magicMode,
+    setMagicMode,
+    magicSelectedCards,
+    setMagicSelectedCards,
+    drawOptions,
+    gameStatus,
+    currentPlayerIndex,
+    draftPile,
+    draftSubStep,
+    pickCharacter,
+    currentTurnNumber,
+    killedId,
+    roomHostId,
+    forceNextTurn,
+    abilityUsed,
+    magicianSwapPlayer,
+    magicianSwapDeck,
+    takeGold,
+    startDraw,
+    pickDrawnCard,
+    assassinKill,
+    robbedId,
+    thiefRob,
+    warMode,
+    setWarMode,
+    turnStartIncome,
+    incomeCollected,
+    collectCharacterIncome,
+    labUsed,
+    smithyUsed,
+    useSmithy,
+    endTurn,
+    buildDistrict,
+    destroyDistrict,
+    kingPlayerId,
+    useLab,
+    activeAnimation,
+    quitGame,
+  } = props;
+
   const me = players.find((p) => p.user_id === myId);
   const [hoveredCardIdx, setHoveredCardIdx] = useState(null);
 
   const isMyDraftTurn =
     gameStatus === "drafting" && players[currentPlayerIndex]?.user_id === myId;
 
-  // ⚡ LA LOGIQUE DU RIDEAU DE THÉÂTRE
   const [showIntro, setShowIntro] = useState(true);
   const [isIntroFading, setIsIntroFading] = useState(false);
 
-  // ⚡ LA LOGIQUE DU DRAFT ÉPIQUE
   const [isDraftingWait, setIsDraftingWait] = useState(false);
   const [selectedDraftCard, setSelectedDraftCard] = useState(null);
-
   const [renderDraft, setRenderDraft] = useState(isMyDraftTurn);
   const [isDraftExiting, setIsDraftExiting] = useState(false);
 
-  // ⚡ ÉTATS DU MENU HAMBURGER
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showQuitModal, setShowQuitModal] = useState(false);
 
-  // ⚡ LOGIQUE DE LA PIOCHE DE CARTES (Nouveau !)
   const [isDrawingWait, setIsDrawingWait] = useState(false);
   const [selectedDrawCard, setSelectedDrawCard] = useState(null);
 
-  // Anti-Fantôme Pioche
   useEffect(() => {
     if (turnPhase !== "drawing" || (drawOptions || []).length === 0) {
       setIsDrawingWait(false);
@@ -93,14 +88,12 @@ const GameView = ({
     }
   }, [turnPhase, drawOptions]);
 
-  // Intercepteur de Clic Pioche
   const handleDrawPick = async (cardId) => {
     if (isDrawingWait) return;
     playSound("cards-flip.mp3", 0.5, null);
     setSelectedDrawCard(cardId);
     setIsDrawingWait(true);
     try {
-      // On attend 1.2s le temps que la carte plonge dans la main
       await new Promise((resolve) => setTimeout(resolve, 1200));
       await pickDrawnCard(cardId);
     } catch (error) {
@@ -110,7 +103,6 @@ const GameView = ({
     }
   };
 
-  // Apparition / Disparition globale de la modale de Draft
   useEffect(() => {
     if (isMyDraftTurn) {
       setRenderDraft(true);
@@ -126,7 +118,6 @@ const GameView = ({
     }
   }, [isMyDraftTurn, renderDraft]);
 
-  // Anti-Fantôme : Coupe le chargement si on est sûr que ce n'est plus à nous
   useEffect(() => {
     if (isMyDraftTurn) {
       setIsDraftingWait(false);
@@ -134,13 +125,11 @@ const GameView = ({
     }
   }, [gameStatus, currentPlayerIndex, draftSubStep, isMyDraftTurn]);
 
-  // ⚡ LA FONCTION DE CLIC DRAFT (Avec délai artificiel de 1.5s)
   const handleDraftPick = async (cardId) => {
     if (isDraftingWait) return;
     playSound("cards-flip.mp3", 0.6, null);
     setSelectedDraftCard(cardId);
     setIsDraftingWait(true);
-
     try {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await pickCharacter(cardId);
@@ -172,7 +161,7 @@ const GameView = ({
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [myId, roomHostId]);
+  }, [myId, roomHostId, showIntro]);
 
   if (!me) {
     return (
@@ -201,7 +190,7 @@ const GameView = ({
       </div>
       <div className="flex-1 flex flex-wrap content-start gap-1 overflow-hidden bg-black/30 p-1 rounded inner-shadow">
         {(opp.city || []).map((cid, i) => {
-          const c = DISTRICTS.find((d) => d.id == cid);
+          const c = districtMap[cid];
           if (!c) return null;
           const isBishop =
             (opp.characters || []).includes(5) &&
@@ -231,7 +220,6 @@ const GameView = ({
                           ? "#b91c1c"
                           : "#7e22ce",
               }}
-              title={c.name}
               onMouseEnter={(e) =>
                 setTooltip({
                   visible: true,
@@ -268,13 +256,12 @@ const GameView = ({
     const isHovered = hoveredCardIdx === idx;
     const isMagicSelected =
       magicMode === "deck" && magicSelectedCards.includes(idx);
-    const rot = isHovered ? 0 : isMagicSelected ? 0 : dist * 5;
+    const rot = isHovered || isMagicSelected ? 0 : dist * 5;
     const ty = isHovered ? -60 : isMagicSelected ? -30 : Math.abs(dist) * 4;
     const scale = isHovered ? 1.15 : 1;
     const zIndex = isHovered || isMagicSelected ? 100 : idx;
-    const canBuild =
-      turnPhase === "build" &&
-      me.gold >= (DISTRICTS.find((d) => d.id === hid)?.cost || 0);
+    const c = districtMap[hid];
+    const canBuild = turnPhase === "build" && me.gold >= (c?.cost || 0);
 
     return (
       <div
@@ -311,7 +298,7 @@ const GameView = ({
     <DistrictCard key={i} id={cid} small disabled setTooltip={setTooltip} />
   ));
 
-  const activeChar = CHARACTERS.find((c) => c.id === currentTurnNumber);
+  const activeChar = charMap[currentTurnNumber];
   const isDead = currentTurnNumber === killedId;
   const isMyCharTurn =
     gameStatus === "playing" &&
@@ -322,11 +309,12 @@ const GameView = ({
   const someoneHasActiveChar = players.some((p) =>
     (p.characters || []).includes(currentTurnNumber),
   );
+
   const hasLab = (me.city || []).some(
-    (id) => DISTRICTS.find((d) => d.id == id)?.name === "Laboratoire",
+    (id) => districtMap[id]?.name === "Laboratoire",
   );
   const hasSmithy = (me.city || []).some(
-    (id) => DISTRICTS.find((d) => d.id == id)?.name === "Forge",
+    (id) => districtMap[id]?.name === "Forge",
   );
   const canCollectIncome =
     [4, 5, 6, 8].includes(currentTurnNumber) &&
@@ -335,7 +323,6 @@ const GameView = ({
 
   return (
     <>
-      {/* 1. LE RIDEAU DE THÉÂTRE EXISTANT */}
       {showIntro && (
         <div
           className="fixed inset-0 z-[30000] flex flex-col items-center justify-center bg-[url('/background.png')] bg-cover bg-center transition-opacity duration-1000"
@@ -350,9 +337,6 @@ const GameView = ({
         </div>
       )}
 
-      {/* ======================================================= */}
-      {/* ⚡ CINÉMATIQUE DE PIOCHE PARFAITE (Taille native + Loupe CSS) */}
-      {/* ======================================================= */}
       {isMyCharTurn && turnPhase === "drawing" && drawOptions?.length > 0 && (
         <div
           className="fixed inset-0 z-[60000] flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm"
@@ -361,20 +345,15 @@ const GameView = ({
           <h3 className="text-2xl md:text-4xl text-amber-500 font-black tracking-[0.2em] uppercase mb-24 drop-shadow-[0_0_15px_rgba(245,158,11,0.5)]">
             {!isDrawingWait ? "Choisissez un Quartier" : "Choix validé..."}
           </h3>
-
-          {/* L'ajout de perspective ici est OBLIGATOIRE pour la 3D */}
           <div
             className="flex gap-16 md:gap-24 justify-center items-center"
             style={{ perspective: "1000px" }}
           >
             {drawOptions.map((id, index) => {
               const isSelected = selectedDrawCard === id;
-
               return (
                 <div
                   key={id}
-                  // ⚡ ON UTILISE LA MÊME TAILLE QUE DANS LA MAIN (w-28 h-40)
-                  // C'est l'animation qui fera un zoom x1.8 !
                   className={`relative w-28 h-40 transition-transform duration-300 ${!isDrawingWait ? "hover:scale-[1.1] cursor-pointer" : ""}`}
                   style={{
                     animation: !isDrawingWait
@@ -383,11 +362,10 @@ const GameView = ({
                         ? "drawCardKeep 1.2s cubic-bezier(0.4, 0, 0.2, 1) forwards"
                         : "drawCardBurn 1s cubic-bezier(0.4, 0, 0.2, 1) forwards",
                     opacity: 0,
-                    transformStyle: "preserve-3d", // Maintient la 3D pour les enfants
+                    transformStyle: "preserve-3d",
                   }}
                   onClick={() => !isDrawingWait && handleDrawPick(id)}
                 >
-                  {/* ⚡ LE DOS DE LA CARTE (Parfaitement aligné) */}
                   <div
                     className="absolute inset-0 bg-stone-900 border-4 border-stone-600 rounded-lg shadow-2xl flex items-center justify-center"
                     style={{
@@ -399,8 +377,6 @@ const GameView = ({
                       ?
                     </span>
                   </div>
-
-                  {/* ⚡ LA FACE DE LA CARTE (Taille native) */}
                   <div
                     className="absolute inset-0 rounded-lg shadow-2xl"
                     style={{
@@ -422,7 +398,6 @@ const GameView = ({
               );
             })}
           </div>
-
           {!isDrawingWait && (
             <p className="text-stone-400 mt-24 text-sm md:text-base italic tracking-wide">
               Les cartes non choisies seront placées sous la pioche.
@@ -443,27 +418,11 @@ const GameView = ({
             @keyframes gameAppear { 0% { opacity: 0; filter: blur(10px); transform: scale(1.02); } 100% { opacity: 1; filter: blur(0px); transform: scale(1); } }
             @keyframes modalAppear { 0% { opacity: 0; transform: scale(0.95); filter: blur(10px); } 100% { opacity: 1; transform: scale(1); filter: blur(0px); } }
             @keyframes modalDisappear { 0% { opacity: 1; transform: scale(1); filter: blur(0px); } 100% { opacity: 0; transform: scale(0.95); filter: blur(10px); } }
-            @keyframes slideUpFade {
-              0% { opacity: 0; transform: translateY(15px); }
-              100% { opacity: 1; transform: translateY(0); }
-            }
-            /* DRAFT ANIMATIONS */
-            @keyframes epicRecruit {
-              0% { transform: scale(0.5) translateY(150px); opacity: 0; filter: brightness(2); }
-              20% { transform: scale(1.2) translateY(0px); opacity: 1; filter: brightness(1.2); }
-              75% { transform: scale(1.3) translateY(-10px); opacity: 1; filter: brightness(1); }
-              100% { transform: scale(0.5) translateY(400px); opacity: 0; filter: brightness(2); }
-            }
+            @keyframes slideUpFade { 0% { opacity: 0; transform: translateY(15px); } 100% { opacity: 1; transform: translateY(0); } }
+            @keyframes epicRecruit { 0% { transform: scale(0.5) translateY(150px); opacity: 0; filter: brightness(2); } 20% { transform: scale(1.2) translateY(0px); opacity: 1; filter: brightness(1.2); } 75% { transform: scale(1.3) translateY(-10px); opacity: 1; filter: brightness(1); } 100% { transform: scale(0.5) translateY(400px); opacity: 0; filter: brightness(2); } }
             @keyframes auraRecruit { 0% { transform: scale(0.5); opacity: 0; } 20% { transform: scale(2.2); opacity: 0.8; } 75% { transform: scale(2.5); opacity: 0.6; } 100% { transform: scale(0); opacity: 0; } }
-            @keyframes epicDiscard {
-              0% { transform: scale(0.5) translateY(150px); opacity: 0; }
-              20% { transform: scale(1.1) translateY(0px) rotate(-5deg); opacity: 1; filter: grayscale(0) brightness(1); }
-              75% { transform: scale(1) translateY(20px) rotate(-15deg); opacity: 1; filter: grayscale(0.8) brightness(0.5); }
-              100% { transform: scale(0) translateY(-300px) rotate(45deg); opacity: 0; filter: grayscale(1) brightness(0); }
-            }
+            @keyframes epicDiscard { 0% { transform: scale(0.5) translateY(150px); opacity: 0; } 20% { transform: scale(1.1) translateY(0px) rotate(-5deg); opacity: 1; filter: grayscale(0) brightness(1); } 75% { transform: scale(1) translateY(20px) rotate(-15deg); opacity: 1; filter: grayscale(0.8) brightness(0.5); } 100% { transform: scale(0) translateY(-300px) rotate(45deg); opacity: 0; filter: grayscale(1) brightness(0); } }
             @keyframes auraDiscard { 0% { transform: scale(0.5); opacity: 0; } 20% { transform: scale(2); opacity: 0.6; background-color: #ef4444; } 75% { transform: scale(1.8); opacity: 0.8; background-color: #7f1d1d; } 100% { transform: scale(0) translateY(-400px); opacity: 0; } }
-
-            /* JEU ANIMATIONS ÉPIQUES RESTAURÉES */
             @keyframes portalSpin { 0% { transform: rotate(0deg) scale(0.8); } 50% { transform: rotate(180deg) scale(1.1); box-shadow: 0 0 80px #a855f7, 0 0 150px #d946ef, inset 0 0 60px #a855f7; } 100% { transform: rotate(360deg) scale(0.8); } }
             @keyframes cardSuck { 0% { transform: translate(var(--startX), 50vh) scale(1.2) rotate(var(--startRot)); opacity: 0; } 10% { opacity: 1; filter: drop-shadow(0 0 20px #a855f7); } 100% { transform: translate(0, 0) scale(0) rotate(720deg); opacity: 0; } }
             @keyframes cardSpit { 0% { transform: translate(0, 0) scale(0) rotate(0deg); opacity: 0; } 10% { opacity: 1; filter: drop-shadow(0 0 20px #22d3ee); } 100% { transform: translate(var(--endX), 50vh) scale(1.2) rotate(var(--endRot)); opacity: 0; } }
@@ -479,31 +438,13 @@ const GameView = ({
             @keyframes heavyShake { 0%, 100% { transform: translate(0, 0) rotate(0deg); } 10% { transform: translate(-30px, 30px) rotate(-3deg); } 20% { transform: translate(30px, -30px) rotate(3deg); } 30% { transform: translate(-20px, -20px) rotate(-2deg); } 40% { transform: translate(20px, 20px) rotate(2deg); } 50% { transform: translate(-10px, 10px) rotate(0deg); } }
             @keyframes explosionScale { 0% { transform: scale(0); opacity: 1; filter: brightness(2); } 50% { transform: scale(3); opacity: 0.8; filter: brightness(1); } 100% { transform: scale(5); opacity: 0; filter: blur(20px); } }
             @keyframes brickFly { 0% { transform: translate(0, 0) scale(1) rotate(0deg); opacity: 1; } 100% { transform: translate(var(--flyX), var(--flyY)) scale(2) rotate(720deg); opacity: 0; filter: blur(4px); } }
-            /* 3. ANIMATIONS DE PIOCHE (Taille réduite 1.3x) */
-            @keyframes drawModalAppear { 
-              0% { opacity: 0; backdrop-filter: blur(0px); } 
-              100% { opacity: 1; backdrop-filter: blur(8px); } 
-            }
-            @keyframes drawCardFlip {
-              0% { transform: translateY(-200px) rotateY(180deg) scale(1.3); opacity: 0; }
-              10% { opacity: 1; }
-              100% { transform: translateY(0) rotateY(0deg) scale(1.3); opacity: 1; }
-            }
-            @keyframes drawCardKeep {
-              0% { transform: rotateY(0deg) scale(1.3); opacity: 1; z-index: 50; }
-              20% { transform: rotateY(0deg) scale(1.5) translateY(-10px); opacity: 1; filter: drop-shadow(0 0 30px #f59e0b); }
-              100% { transform: rotateY(0deg) scale(0.5) translateY(800px); opacity: 0; }
-            }
-            @keyframes drawCardBurn {
-              0% { transform: rotateY(0deg) scale(1.3); opacity: 1; filter: grayscale(0); }
-              100% { transform: rotateY(0deg) scale(0) translateY(-300px) rotate(45deg); opacity: 0; filter: grayscale(1) blur(5px); }
-            }
+            @keyframes drawModalAppear { 0% { opacity: 0; backdrop-filter: blur(0px); } 100% { opacity: 1; backdrop-filter: blur(8px); } }
+            @keyframes drawCardFlip { 0% { transform: translateY(-200px) rotateY(180deg) scale(1.3); opacity: 0; } 10% { opacity: 1; } 100% { transform: translateY(0) rotateY(0deg) scale(1.3); opacity: 1; } }
+            @keyframes drawCardKeep { 0% { transform: rotateY(0deg) scale(1.3); opacity: 1; z-index: 50; } 20% { transform: rotateY(0deg) scale(1.5) translateY(-10px); opacity: 1; filter: drop-shadow(0 0 30px #f59e0b); } 100% { transform: rotateY(0deg) scale(0.5) translateY(800px); opacity: 0; } }
+            @keyframes drawCardBurn { 0% { transform: rotateY(0deg) scale(1.3); opacity: 1; filter: grayscale(0); } 100% { transform: rotateY(0deg) scale(0) translateY(-300px) rotate(45deg); opacity: 0; filter: grayscale(1) blur(5px); } }
           `}
         </style>
 
-        {/* ⚡ RESTAURATION : LES 5 ANIMATIONS DE PERSONNAGES IN-GAME */}
-
-        {/* ANIMATION 1 : PORTAIL DE TRANSMUTATION (Pioche) */}
         {activeAnimation?.type === "magic_swap_deck" &&
           activeAnimation.player === myId && (
             <div className="fixed inset-0 z-[9999] pointer-events-none flex items-center justify-center overflow-hidden">
@@ -552,7 +493,6 @@ const GameView = ({
             </div>
           )}
 
-        {/* ANIMATION 2 : CHOC ASTRAL (Échange de joueurs) */}
         {activeAnimation?.type === "magic_swap" &&
           (activeAnimation.from === myId || activeAnimation.to === myId) && (
             <div className="fixed inset-0 z-[9999] pointer-events-none flex items-center justify-center overflow-hidden">
@@ -593,7 +533,6 @@ const GameView = ({
             </div>
           )}
 
-        {/* ANIMATION 3 : LAME DE L'ASSASSIN */}
         {activeAnimation?.type === "assassin_kill" &&
           (activeAnimation.sourceId === myId ||
             (me?.characters || []).includes(activeAnimation.targetId)) && (
@@ -623,7 +562,7 @@ const GameView = ({
                 className="absolute z-30 text-8xl text-red-500 font-black uppercase tracking-widest drop-shadow-[0_0_40px_#7f1d1d] text-center"
                 style={{ animation: "epicText 2.5s ease-in-out forwards" }}
               >
-                {CHARACTERS.find((c) => c.id == activeAnimation.targetId)?.name}
+                {charMap[activeAnimation.targetId]?.name}
                 <div className="text-4xl text-red-300 mt-4 tracking-[0.5em]">
                   Éliminé
                 </div>
@@ -631,7 +570,6 @@ const GameView = ({
             </div>
           )}
 
-        {/* ANIMATION 4 : VOL DANS L'OMBRE (Voleur) */}
         {activeAnimation?.type === "thief_rob" &&
           (activeAnimation.sourceId === myId ||
             (me?.characters || []).includes(activeAnimation.targetId)) && (
@@ -664,7 +602,7 @@ const GameView = ({
                 className="absolute z-30 text-7xl text-slate-300 font-black uppercase tracking-widest drop-shadow-[0_0_30px_#ffffff] text-center"
                 style={{ animation: "thiefText 2.5s ease-in-out forwards" }}
               >
-                {CHARACTERS.find((c) => c.id == activeAnimation.targetId)?.name}
+                {charMap[activeAnimation.targetId]?.name}
                 <div className="text-4xl text-yellow-500 mt-4 tracking-[0.4em] drop-shadow-[0_0_15px_#eab308]">
                   Détroussé
                 </div>
@@ -672,7 +610,6 @@ const GameView = ({
             </div>
           )}
 
-        {/* ANIMATION 5 : DESTRUCTION DU CONDOTTIERE */}
         {activeAnimation?.type === "condottiere_destroy" &&
           (activeAnimation.sourceId === myId ||
             activeAnimation.targetId === myId) && (
@@ -714,10 +651,7 @@ const GameView = ({
                   }
                 </div>
                 <div className="text-7xl text-red-500 mt-2 font-black uppercase tracking-[0.2em] drop-shadow-[0_0_30px_#991b1b]">
-                  {
-                    DISTRICTS.find((d) => d.id == activeAnimation.districtId)
-                      ?.name
-                  }
+                  {districtMap[activeAnimation.districtId]?.name}
                 </div>
                 <div className="text-4xl text-orange-400 mt-4 tracking-[0.5em] font-bold">
                   DÉTRUIT
@@ -731,9 +665,6 @@ const GameView = ({
           type={notification?.type}
         />
 
-        {/* ======================================================= */}
-        {/* ⚡ LE NOUVEAU TOOLTIP INTELLIGENT (Anti-Sortie d'écran) */}
-        {/* ======================================================= */}
         {tooltip &&
           (() => {
             const getTooltipTheme = (color) => {
@@ -777,16 +708,10 @@ const GameView = ({
             };
 
             const theme = getTooltipTheme(tooltip.color);
-
-            // ⚡ LA MAGIE EST ICI : Le radar anti-sortie d'écran
             const screenW = window.innerWidth;
             const screenH = window.innerHeight;
-
-            // On vérifie dans quelle moitié de l'écran se trouve la souris
             const isRightHalf = tooltip.x > screenW / 2;
             const isBottomHalf = tooltip.y > screenH / 2;
-
-            // On inverse la position dynamiquement selon la zone !
             const positionStyle = {
               top: isBottomHalf ? "auto" : tooltip.y + 15,
               bottom: isBottomHalf ? screenH - tooltip.y + 15 : "auto",
@@ -796,7 +721,6 @@ const GameView = ({
 
             return (
               <div
-                // J'ai mis une largeur fixe (w-[300px]) pour éviter que le texte ne s'écrase bizarrement quand il touche un bord
                 className={`fixed bg-black/95 border-2 ${theme.border} p-5 rounded-xl w-[300px] shadow-[0_15px_50px_rgba(0,0,0,0.9)] z-[90000] pointer-events-none backdrop-blur-md ${theme.bg} transition-colors duration-200`}
                 style={positionStyle}
               >
@@ -805,7 +729,6 @@ const GameView = ({
                 >
                   {tooltip.name}
                 </h4>
-
                 <div className="flex gap-3 text-xs mb-3 border-b border-stone-700/50 pb-3">
                   <span className="text-amber-400 font-bold bg-amber-950/80 border border-amber-700/50 px-2 py-1 rounded shadow-inner">
                     💰 {tooltip.cost} Or
@@ -816,29 +739,18 @@ const GameView = ({
                     {theme.label}
                   </span>
                 </div>
-
-                {tooltip.desc ? (
-                  <p className="text-sm italic text-stone-300 leading-relaxed font-serif drop-shadow-sm">
-                    {tooltip.desc}
-                  </p>
-                ) : (
-                  <p className="text-xs text-stone-500 italic">
-                    Quartier standard.
-                  </p>
-                )}
+                <p className="text-sm italic text-stone-300 leading-relaxed font-serif drop-shadow-sm">
+                  {tooltip.desc || "Quartier standard."}
+                </p>
               </div>
             );
           })()}
 
-        {/* TOP BAR: OPPONENTS */}
         <div className="h-[140px] shrink-0 bg-stone-900/90 border-b-4 border-stone-800 shadow-xl flex items-center px-4 gap-4 overflow-x-auto z-20 inner-shadow">
           {opponentsRender}
         </div>
 
         <div className="flex-1 relative flex flex-col items-center justify-center p-2 overflow-hidden z-40">
-          {/* ======================================================= */}
-          {/* ⚡ CINÉMATIQUE DE DRAFT */}
-          {/* ======================================================= */}
           {renderDraft && (
             <div
               className="absolute inset-0 z-[100] flex items-center justify-center pointer-events-none p-4"
@@ -849,7 +761,6 @@ const GameView = ({
               }}
             >
               <div
-                key={draftSubStep}
                 className={`${isDraftExiting ? "pointer-events-none" : "pointer-events-auto"} inline-flex flex-col items-center justify-center bg-stone-900/95 p-6 md:p-8 rounded-2xl border-4 ${draftSubStep === "discard" ? "border-red-900 shadow-[0_0_50px_rgba(153,27,27,0.5)]" : "border-amber-800 shadow-[0_0_50px_rgba(245,158,11,0.4)]"} text-center w-auto min-w-[320px] max-w-full md:max-w-4xl transition-all duration-300`}
                 style={{
                   animation: isDraftExiting
@@ -871,7 +782,6 @@ const GameView = ({
                         ? "Ce rôle sera secrètement mis de côté."
                         : "Ce rôle sera le vôtre pour ce tour."}
                     </p>
-
                     <div className="flex flex-wrap gap-4 justify-center w-full pb-2">
                       {draftPile.map((c) => {
                         const style = getCharColors(c.id);
@@ -897,7 +807,6 @@ const GameView = ({
                     </div>
                   </div>
                 ) : (
-                  // ⚡ LA SÉQUENCE CINÉMATIQUE SANS TEXTE
                   <div className="w-full flex flex-col items-center justify-center relative h-[380px]">
                     {(() => {
                       const pickedCard = draftPile.find(
@@ -908,7 +817,6 @@ const GameView = ({
                       const isDiscard = draftSubStep === "discard";
                       return (
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-                          {/* 1. L'Aura */}
                           <div
                             className={`absolute w-64 h-64 blur-3xl rounded-full ${isDiscard ? "bg-red-600" : "bg-amber-400"}`}
                             style={{
@@ -917,8 +825,6 @@ const GameView = ({
                                 : "auraRecruit 1.5s cubic-bezier(0.2, 0.8, 0.2, 1) forwards",
                             }}
                           ></div>
-
-                          {/* 2. La Carte Unique */}
                           <div
                             className={`w-40 h-64 rounded-xl border-4 ${style.border} ${style.bg} flex flex-col items-center justify-center gap-4 shadow-[0_30px_60px_rgba(0,0,0,0.9)] relative z-20`}
                             style={{
@@ -994,8 +900,6 @@ const GameView = ({
                   <h3 className="text-xl text-center text-amber-100 mb-4 uppercase tracking-[0.3em] border-b-2 border-stone-800 pb-2">
                     Votre Tour, Messire
                   </h3>
-
-                  {/* ⚡ GRIMOIRE MAGICIEN (Animé) */}
                   {currentTurnNumber === 3 && magicMode && !abilityUsed && (
                     <div
                       className="mb-4 bg-purple-900/30 p-3 rounded border border-purple-500"
@@ -1041,7 +945,6 @@ const GameView = ({
                     </div>
                   )}
 
-                  {/* ⚡ BOUTONS DE RESSOURCES */}
                   {(turnPhase === "resource" || !turnPhase) && (
                     <div
                       className="flex gap-4 justify-center"
@@ -1072,13 +975,8 @@ const GameView = ({
                     </div>
                   )}
 
-                  {/* BOUTON DE SACOURS PIOCHE (Déjà géré dans ton autre bloc normalement, je le laisse si tu utilises l'ancienne structure) */}
-                  {/* ... */}
-
-                  {/* ⚡ PHASE DE CONSTRUCTION ET ACTIONS DE RÔLES (Animées en cascade) */}
                   {turnPhase === "build" && (
                     <div className="space-y-4">
-                      {/* ASSASSIN */}
                       {currentTurnNumber === 1 && !killedId && (
                         <div
                           className="bg-red-950/40 p-3 rounded border-red-900/50 text-center"
@@ -1107,7 +1005,6 @@ const GameView = ({
                         </div>
                       )}
 
-                      {/* VOLEUR */}
                       {currentTurnNumber === 2 && !robbedId && (
                         <div
                           className="bg-blue-950/40 p-3 rounded border-blue-900/50 text-center"
@@ -1137,7 +1034,6 @@ const GameView = ({
                         </div>
                       )}
 
-                      {/* MAGICIEN (Choix initiaux) */}
                       {currentTurnNumber === 3 &&
                         !magicMode &&
                         !abilityUsed && (
@@ -1162,7 +1058,6 @@ const GameView = ({
                           </div>
                         )}
 
-                      {/* CONDOTTIERE */}
                       {currentTurnNumber === 8 && !warMode && !abilityUsed && (
                         <div
                           style={{
@@ -1190,7 +1085,6 @@ const GameView = ({
                         </div>
                       )}
 
-                      {/* ⚡ BOUTONS MINEURS ET FIN DE TOUR (Apparition décalée) */}
                       <div
                         className="flex flex-wrap gap-2 justify-center border-t border-stone-800 pt-3"
                         style={{
@@ -1277,7 +1171,7 @@ const GameView = ({
                 Vos Rôles
               </p>
               {me.characters.map((cid) => {
-                const char = CHARACTERS.find((c) => c.id === cid);
+                const char = charMap[cid];
                 const played = (me.played_characters || []).includes(cid);
                 const dead = killedId === cid;
                 const style = getCharColors(cid);
@@ -1292,7 +1186,7 @@ const GameView = ({
                       {cid}
                     </div>
                     <span
-                      className={`text-xs font-bold uppercase tracking-wide ${dead ? "line-through text-red-600Decoration-4" : "text-stone-100"}`}
+                      className={`text-xs font-bold uppercase tracking-wide ${dead ? "line-through text-red-600 decoration-4" : "text-stone-100"}`}
                     >
                       {char?.name || "Inconnu"}
                     </span>
@@ -1320,11 +1214,7 @@ const GameView = ({
           </div>
         </div>
       </div>
-      {/* ======================================================= */}
-      {/* ⚡ MENU HAMBURGER & MODALES (Paramètres / Quitter) */}
-      {/* ======================================================= */}
 
-      {/* 1. LE BOUTON HAMBURGER */}
       <div className="fixed top-4 right-4 z-[80000]">
         <button
           onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -1341,7 +1231,6 @@ const GameView = ({
           ></span>
         </button>
 
-        {/* LE DÉROULANT */}
         {isMenuOpen && (
           <div
             className="absolute top-full right-0 mt-3 w-56 bg-stone-900 border-2 border-stone-700 rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] overflow-hidden"
@@ -1369,7 +1258,6 @@ const GameView = ({
         )}
       </div>
 
-      {/* 2. LA MODALE DES PARAMÈTRES */}
       {showSettingsModal && (
         <div className="fixed inset-0 z-[90000] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div
@@ -1394,7 +1282,6 @@ const GameView = ({
         </div>
       )}
 
-      {/* 3. LA MODALE DE CONFIRMATION "QUITTER" */}
       {showQuitModal && (
         <div className="fixed inset-0 z-[90000] flex items-center justify-center bg-black/90 backdrop-blur-md p-4">
           <div

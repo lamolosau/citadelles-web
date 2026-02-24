@@ -1,65 +1,65 @@
 import { useRef } from "react";
 import { playSound } from "../utils/soundManager";
 import { CHARACTERS, DISTRICTS } from "../data/gameData";
-import { shuffle, removeOne } from "../utils/gameLogic";
+import { shuffle, removeOne, DISTRICT_MAP } from "../utils/gameLogic";
 
-// ==========================================
-// HOOK : Actions de Jeu (Version Ultra Sécurisée & Prédictive 🚀)
-// ==========================================
+export const useGameActions = (props) => {
+  const {
+    supabase,
+    myId,
+    myIdRef,
+    roomId,
+    players,
+    playersRef,
+    draftPile,
+    setDraftPile,
+    draftSubStep,
+    setDraftSubStep,
+    currentPlayerIndex,
+    setCurrentPlayerIndex,
+    gameStatus,
+    setGameStatus,
+    kingPlayerId,
+    kingPlayerIdRef,
+    drawOptions,
+    setDrawOptions,
+    currentTurnNumber,
+    setCurrentTurnNumber,
+    killedId,
+    robbedId,
+    buildsCount,
+    setBuildsCount,
+    firstBuilderId,
+    setTurnPhase,
+    setWarMode,
+    setAbilityUsed,
+    setShowLabModal,
+    setLabUsed,
+    setSmithyUsed,
+    setMagicMode,
+    magicSelectedCards,
+    setMagicSelectedCards,
+    turnStartIncome,
+    setIncomeCollected,
+    isActionPending,
+    setIsActionPending,
+    notify,
+    broadcastNotify,
+    broadcastAction,
+    setActiveAnimation,
+  } = props;
 
-export const useGameActions = ({
-  supabase,
-  myId,
-  myIdRef,
-  roomId,
-  players,
-  playersRef,
-  draftPile,
-  setDraftPile,
-  draftSubStep,
-  setDraftSubStep,
-  currentPlayerIndex,
-  setCurrentPlayerIndex,
-  gameStatus,
-  setGameStatus,
-  kingPlayerId,
-  kingPlayerIdRef,
-  drawOptions,
-  setDrawOptions,
-  currentTurnNumber,
-  setCurrentTurnNumber,
-  killedId,
-  robbedId,
-  buildsCount,
-  setBuildsCount,
-  firstBuilderId,
-  setTurnPhase,
-  setWarMode,
-  setAbilityUsed,
-  setShowLabModal,
-  setLabUsed,
-  setSmithyUsed,
-  setMagicMode,
-  magicSelectedCards,
-  setMagicSelectedCards,
-  turnStartIncome,
-  setIncomeCollected,
-  isActionPending,
-  setIsActionPending,
-  notify,
-  broadcastNotify,
-  broadcastAction,
-  setActiveAnimation,
-}) => {
   const actionLockRef = useRef(false);
 
   const rebuildDeckIfNeeded = async (currentStack, neededCount) => {
     if (currentStack.length >= neededCount) return currentStack;
+
     const { data: allPlayers } = await supabase
       .from("players")
       .select("hand, city")
       .eq("room_id", roomId);
     const countsInPlay = {};
+
     currentStack.forEach(
       (id) => (countsInPlay[id] = (countsInPlay[id] || 0) + 1),
     );
@@ -73,22 +73,24 @@ export const useGameActions = ({
         );
       });
     }
-    let discarded = [];
+
+    const discarded = [];
     DISTRICTS.forEach((card) => {
       const total = card.qty || 1;
       const used = countsInPlay[card.id] || 0;
-      const inDisc = total - used;
-      for (let i = 0; i < inDisc; i++) discarded.push(card.id);
+      for (let i = 0; i < total - used; i++) discarded.push(card.id);
     });
+
     return [...currentStack, ...shuffle(discarded)];
   };
 
   const pickCharacter = async (cid) => {
-    // 1. SÉCURITÉ ABSOLUE : Anti-spam local
-    if (actionLockRef.current || isActionPending) return;
-
-    // 2. SÉCURITÉ ABSOLUE : Est-ce bien mon tour sur le serveur ?
-    if (players[currentPlayerIndex]?.user_id !== myId) return;
+    if (
+      actionLockRef.current ||
+      isActionPending ||
+      players[currentPlayerIndex]?.user_id !== myId
+    )
+      return;
 
     actionLockRef.current = true;
     setIsActionPending(true);
@@ -98,25 +100,18 @@ export const useGameActions = ({
       if ((me?.characters || []).includes(cid)) return;
 
       const count = players.length;
-      const remaining = draftPile.filter((c) => c.id !== cid); // Les cartes qui vont rester
+      const remaining = draftPile.filter((c) => c.id !== cid);
       let updateRoom = {};
       const promises = [];
 
-      // Optimistic UI : On retire la carte visuellement pour la fluidité
       setDraftPile(remaining);
 
       if (count === 2) {
-        // ========================================================
-        // MOTEUR DÉTERMINISTE 2 JOUEURS (Basé sur les cartes restantes)
-        // ========================================================
         const kingIdx = players.findIndex((p) => p.user_id === kingPlayerId);
         const p1Idx = kingIdx !== -1 ? kingIdx : 0;
         const p2Idx = (p1Idx + 1) % 2;
 
-        // Si l'action aboutit à 6, 5, 3 ou 1 carte restante, c'était un RECRUTEMENT
-        const isPickAction = [6, 5, 3, 1].includes(remaining.length);
-
-        if (isPickAction) {
+        if ([6, 5, 3, 1].includes(remaining.length)) {
           promises.push(
             supabase
               .from("players")
@@ -126,9 +121,7 @@ export const useGameActions = ({
           );
         }
 
-        // Déduction mathématique de la prochaine étape
         if (remaining.length === 1) {
-          // Fin du Draft !
           setGameStatus("playing");
           setCurrentTurnNumber(1);
           setTurnPhase("resource");
@@ -144,20 +137,16 @@ export const useGameActions = ({
           if (remaining.length === 6) {
             nextIdx = p2Idx;
             nextStep = "pick";
-          }
-          if (remaining.length === 5) {
+          } else if (remaining.length === 5) {
             nextIdx = p2Idx;
             nextStep = "discard";
-          }
-          if (remaining.length === 4) {
+          } else if (remaining.length === 4) {
             nextIdx = p1Idx;
             nextStep = "pick";
-          }
-          if (remaining.length === 3) {
+          } else if (remaining.length === 3) {
             nextIdx = p1Idx;
             nextStep = "discard";
-          }
-          if (remaining.length === 2) {
+          } else if (remaining.length === 2) {
             nextIdx = p2Idx;
             nextStep = "pick";
           }
@@ -171,9 +160,6 @@ export const useGameActions = ({
           };
         }
       } else {
-        // ========================================================
-        // MULTIJOUEURS (3+)
-        // ========================================================
         promises.push(
           supabase
             .from("players")
@@ -214,10 +200,7 @@ export const useGameActions = ({
     }
   };
 
-  // ... (LE RESTE DE TES FONCTIONS takeGold, startDraw, etc. RESTE INTACT) ...
-
   const takeGold = async () => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
@@ -242,7 +225,6 @@ export const useGameActions = ({
   };
 
   const startDraw = async () => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
@@ -253,16 +235,16 @@ export const useGameActions = ({
         .select("district_stack")
         .eq("id", roomId)
         .single();
+
       let s = r.district_stack || [];
       const hasObs = (me.city || []).some(
-        (id) => DISTRICTS.find((d) => d.id == id)?.name === "Observatoire",
+        (id) => DISTRICT_MAP[id]?.name === "Observatoire",
       );
       const count = hasObs ? 3 : 2;
+
       s = await rebuildDeckIfNeeded(s, count);
-      if (s.length < count) {
-        notify("La pioche est épuisée !", "error");
-        return;
-      }
+      if (s.length < count) return notify("La pioche est épuisée !", "error");
+
       const opts = s.splice(0, count);
       setDrawOptions(opts);
       setTurnPhase("drawing");
@@ -277,14 +259,13 @@ export const useGameActions = ({
   };
 
   const pickDrawnCard = async (cid) => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
     try {
       const me = players.find((p) => p.user_id === myId);
       const hasLibrary = (me.city || []).some(
-        (id) => DISTRICTS.find((d) => d.id == id)?.name === "Bibliothèque",
+        (id) => DISTRICT_MAP[id]?.name === "Bibliothèque",
       );
       const kept = hasLibrary ? drawOptions : [cid];
       const rejected = hasLibrary ? [] : removeOne(drawOptions, cid);
@@ -293,10 +274,13 @@ export const useGameActions = ({
         .select("district_stack")
         .eq("id", roomId)
         .single();
+
       setDrawOptions([]);
       setTurnPhase("build");
+
       if (hasLibrary)
         notify("Bibliothèque : Vous gardez toutes les cartes !", "success");
+
       await Promise.all([
         supabase
           .from("rooms")
@@ -318,26 +302,23 @@ export const useGameActions = ({
   };
 
   const buildDistrict = async (cid) => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
     try {
       const me = playersRef.current.find((p) => p.user_id === myIdRef.current);
       if (!me) return;
-      const c = DISTRICTS.find((d) => d.id == cid);
-      if (me.gold < c.cost) {
-        notify("Pas assez d'or !", "error");
-        return;
-      }
+
+      const c = DISTRICT_MAP[cid];
+      if (me.gold < c.cost) return notify("Pas assez d'or !", "error");
+
       const limit = currentTurnNumber === 7 ? 3 : 1;
-      if (buildsCount >= limit) {
-        notify("Limite atteinte !", "error");
-        return;
-      }
+      if (buildsCount >= limit) return notify("Limite atteinte !", "error");
+
       const newCity = [...(me.city || []), cid];
       setBuildsCount((p) => p + 1);
       notify(`Construction : ${c.name}`, "success");
+
       const promises = [
         supabase
           .from("players")
@@ -356,6 +337,7 @@ export const useGameActions = ({
             .update({ first_builder_id: myId })
             .eq("id", roomId),
         );
+
       await Promise.all(promises);
     } finally {
       actionLockRef.current = false;
@@ -364,7 +346,6 @@ export const useGameActions = ({
   };
 
   const destroyDistrict = async (targetPlayerId, districtId, cost) => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
@@ -372,28 +353,28 @@ export const useGameActions = ({
       const me = players.find((p) => p.user_id === myId);
       const target = players.find((p) => p.user_id === targetPlayerId);
       const isBishop = (target.characters || []).includes(5);
-      if (isBishop && killedId !== 5) {
-        notify("L'Évêque est protégé par l'Église.", "error");
-        return;
-      }
+
+      if (isBishop && killedId !== 5)
+        return notify("L'Évêque est protégé par l'Église.", "error");
+
       const hasGreatWall = (target.city || []).some(
-        (id) => DISTRICTS.find((d) => d.id == id)?.name === "Grande Muraille",
+        (id) => DISTRICT_MAP[id]?.name === "Grande Muraille",
       );
       const destCost = cost - 1 + (hasGreatWall ? 1 : 0);
-      if (me.gold < destCost) {
-        notify(
+
+      if (me.gold < destCost)
+        return notify(
           hasGreatWall ? "Grande Muraille : Coût +1 Or !" : "Pas assez d'or !",
           "error",
         );
-        return;
-      }
-      const c = DISTRICTS.find((d) => d.id == districtId);
-      if (c.name === "Donjon") {
-        notify("Le Donjon est indestructible !", "error");
-        return;
-      }
+
+      const c = DISTRICT_MAP[districtId];
+      if (c.name === "Donjon")
+        return notify("Le Donjon est indestructible !", "error");
+
       setWarMode(false);
       setAbilityUsed(true);
+
       const animData = {
         type: "condottiere_destroy",
         sourceId: myId,
@@ -407,6 +388,7 @@ export const useGameActions = ({
         `Le Condottiere a détruit le quartier ${c.name} de ${target.pseudo}.`,
         "error",
       );
+
       await Promise.all([
         supabase
           .from("players")
@@ -426,7 +408,6 @@ export const useGameActions = ({
   };
 
   const useLab = async (cid) => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
@@ -446,16 +427,13 @@ export const useGameActions = ({
   };
 
   const useSmithy = async () => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
     try {
       const me = players.find((p) => p.user_id === myId);
-      if (me.gold < 2) {
-        notify("Pas assez d'or pour la Forge !", "error");
-        return;
-      }
+      if (me.gold < 2) return notify("Pas assez d'or pour la Forge !", "error");
+
       const { data: r } = await supabase
         .from("rooms")
         .select("district_stack")
@@ -463,13 +441,12 @@ export const useGameActions = ({
         .single();
       let s = r.district_stack || [];
       s = await rebuildDeckIfNeeded(s, 3);
-      if (s.length < 3) {
-        notify("Pioche épuisée pour la Forge.", "error");
-        return;
-      }
+      if (s.length < 3) return notify("Pioche épuisée pour la Forge.", "error");
+
       const drawn = s.splice(0, 3);
       setSmithyUsed(true);
       notify("Forge : 3 Cartes forgées !", "success");
+
       await Promise.all([
         supabase.from("rooms").update({ district_stack: s }).eq("id", roomId),
         supabase
@@ -484,15 +461,16 @@ export const useGameActions = ({
   };
 
   const magicianSwapPlayer = async (tid) => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
     try {
       const me = players.find((p) => p.user_id === myId);
       const target = players.find((p) => p.user_id === tid);
+
       setMagicMode(null);
       setAbilityUsed(true);
+
       const animData = {
         type: "magic_swap",
         sourceId: myId,
@@ -507,6 +485,7 @@ export const useGameActions = ({
         `Le Magicien a échangé son jeu avec ${target.pseudo}.`,
         "info",
       );
+
       await Promise.all([
         supabase
           .from("players")
@@ -526,33 +505,34 @@ export const useGameActions = ({
   };
 
   const magicianSwapDeck = async () => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
+    if (magicSelectedCards.length === 0) return;
     actionLockRef.current = true;
     setIsActionPending(true);
     try {
-      if (magicSelectedCards.length === 0) return;
       const me = players.find((p) => p.user_id === myId);
       const { data: r } = await supabase
         .from("rooms")
         .select("district_stack")
         .eq("id", roomId)
         .single();
+
       let stack = r.district_stack || [];
       stack = await rebuildDeckIfNeeded(stack, magicSelectedCards.length);
-      if (stack.length < magicSelectedCards.length) {
-        notify("Pas assez de cartes !", "error");
-        return;
-      }
+      if (stack.length < magicSelectedCards.length)
+        return notify("Pas assez de cartes !", "error");
+
       const drawn = stack.splice(0, magicSelectedCards.length);
       const currentHand = me.hand || [];
       const cardsToPutBack = magicSelectedCards.map((idx) => currentHand[idx]);
       const newHand = currentHand.filter(
         (_, idx) => !magicSelectedCards.includes(idx),
       );
+
       setMagicMode(null);
       setMagicSelectedCards([]);
       setAbilityUsed(true);
+
       const animData = { type: "magic_swap_deck", player: myId };
       setActiveAnimation(animData);
       setTimeout(() => setActiveAnimation(null), 2500);
@@ -561,6 +541,7 @@ export const useGameActions = ({
         `Le Magicien a échangé ${drawn.length} cartes avec la pioche.`,
         "info",
       );
+
       await Promise.all([
         supabase
           .from("rooms")
@@ -579,24 +560,16 @@ export const useGameActions = ({
   };
 
   const thiefRob = async (tid) => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
     try {
       const me = players.find((p) => p.user_id === myId);
-      if (me && (me.characters || []).includes(tid)) {
-        notify("Auto-vol interdit !", "error");
-        return;
-      }
-      if (tid === killedId) {
-        notify("Déjà mort !", "error");
-        return;
-      }
-      if (tid === 1) {
-        notify("Impossible !", "error");
-        return;
-      }
+      if (me && (me.characters || []).includes(tid))
+        return notify("Auto-vol interdit !", "error");
+      if (tid === killedId) return notify("Déjà mort !", "error");
+      if (tid === 1) return notify("Impossible !", "error");
+
       setTurnPhase("resource");
       const animData = { type: "thief_rob", sourceId: myId, targetId: tid };
       setActiveAnimation(animData);
@@ -613,16 +586,14 @@ export const useGameActions = ({
   };
 
   const assassinKill = async (tid) => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
     try {
       const me = playersRef.current.find((p) => p.user_id === myIdRef.current);
-      if (me && (me.characters || []).includes(tid)) {
-        notify("Suicide interdit !", "error");
-        return;
-      }
+      if (me && (me.characters || []).includes(tid))
+        return notify("Suicide interdit !", "error");
+
       setTurnPhase("resource");
       const animData = { type: "assassin_kill", sourceId: myId, targetId: tid };
       setActiveAnimation(animData);
@@ -639,7 +610,6 @@ export const useGameActions = ({
   };
 
   const forceNextTurn = async () => {
-    /* ... ton code existant ... */
     const next = currentTurnNumber + 1;
     if (next > 8) {
       setGameStatus("drafting");
@@ -675,7 +645,6 @@ export const useGameActions = ({
   };
 
   const endTurn = async () => {
-    /* ... ton code existant ... */
     if (actionLockRef.current || isActionPending) return;
     actionLockRef.current = true;
     setIsActionPending(true);
@@ -702,12 +671,12 @@ export const useGameActions = ({
   };
 
   const prepareDraft = async (stack) => {
-    /* ... ton code existant ... */
     const pc = playersRef.current.length;
     let c = shuffle([...CHARACTERS]);
     const fd = c.pop();
     let fuCount = pc === 4 ? 2 : pc === 5 ? 1 : 0;
     const fu = c.splice(0, fuCount);
+
     await Promise.all([
       supabase
         .from("players")
@@ -740,7 +709,6 @@ export const useGameActions = ({
   };
 
   const collectCharacterIncome = async () => {
-    /* ... ton code existant ... */
     if (actionLockRef.current) return;
     actionLockRef.current = true;
     try {
@@ -763,15 +731,11 @@ export const useGameActions = ({
     actionLockRef.current = true;
     setIsActionPending(true);
     try {
-      // 1. On supprime définitivement le joueur de la partie dans la BDD
       await supabase
         .from("players")
         .delete()
         .eq("user_id", myId)
         .eq("room_id", roomId);
-
-      // 2. On rafraîchit la page pour le ramener à l'écran de Login/Lobby
-      // (C'est la méthode la plus robuste pour réinitialiser tous les états locaux React)
       window.location.reload();
     } catch (error) {
       console.error(error);

@@ -1,26 +1,17 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabase";
 
-// ==========================================
-// IMPORTS : Composants et Vues
-// ==========================================
 import LoadingScreen from "./components/LoadingScreen";
 import LoginView from "./views/LoginView";
 import LobbyView from "./views/LobbyView";
 import FinishedView from "./views/FinishedView";
 import GameView from "./views/GameView";
 
-// ==========================================
-// IMPORTS : Custom Hooks
-// ==========================================
 import { useRoomConnection } from "./hooks/useRoomConnection";
 import { useGameActions } from "./hooks/useGameActions";
 import { useSupabaseSync } from "./hooks/useSupabaseSync";
 
 function App() {
-  // ----------------------------------------
-  // 1. ÉTATS GLOBAUX DE L'APPLICATION
-  // ----------------------------------------
   const hasSavedSession = !!(
     localStorage.getItem("citadelles_room_id") &&
     localStorage.getItem("citadelles_player_id")
@@ -31,7 +22,6 @@ function App() {
   const [notification, setNotification] = useState(null);
   const [tooltip, setTooltip] = useState(null);
 
-  // États du Joueur & Salle
   const [pseudo, setPseudo] = useState("");
   const [roomCode, setRoomCode] = useState("");
   const [roomId, setRoomId] = useState(null);
@@ -39,7 +29,6 @@ function App() {
   const [players, setPlayers] = useState([]);
   const [onlineIds, setOnlineIds] = useState([]);
 
-  // États de la Partie
   const [gameStatus, setGameStatus] = useState("waiting");
   const [roomHostId, setRoomHostId] = useState(null);
   const [kingPlayerId, setKingPlayerId] = useState(null);
@@ -50,14 +39,12 @@ function App() {
   const [draftSubStep, setDraftSubStep] = useState("pick");
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
 
-  // États spécifiques au Tour
   const [drawOptions, setDrawOptions] = useState([]);
   const [killedId, setKilledId] = useState(null);
   const [robbedId, setRobbedId] = useState(null);
   const [buildsCount, setBuildsCount] = useState(0);
   const [firstBuilderId, setFirstBuilderId] = useState(null);
 
-  // Capacités spéciales & Actions UI
   const [magicMode, setMagicMode] = useState(null);
   const [magicSelectedCards, setMagicSelectedCards] = useState([]);
   const [warMode, setWarMode] = useState(false);
@@ -68,16 +55,12 @@ function App() {
   const [incomeCollected, setIncomeCollected] = useState(false);
   const [turnStartIncome, setTurnStartIncome] = useState(0);
 
-  // Interface de gestion
   const [showLabModal, setShowLabModal] = useState(false);
   const [showLeaveModal, setShowLeaveModal] = useState(false);
   const [playerToKickId, setPlayerToKickId] = useState(null);
   const [isActionPending, setIsActionPending] = useState(false);
-  const [activeAnimation, setActiveAnimation] = useState(null); // ⚡ NOUVEAU : Gère les animations visuelles
+  const [activeAnimation, setActiveAnimation] = useState(null);
 
-  // ----------------------------------------
-  // 2. RÉFÉRENCES MUTABLES (Pour les effets)
-  // ----------------------------------------
   const myIdRef = useRef(null);
   const roomIdRef = useRef(null);
   const playersRef = useRef([]);
@@ -96,9 +79,6 @@ function App() {
     kingPlayerIdRef.current = kingPlayerId;
   }, [myId, roomId, players, roomHostId, kingPlayerId]);
 
-  // ----------------------------------------
-  // 3. FONCTIONS UTILITAIRES DE L'APP
-  // ----------------------------------------
   const opponents = players.filter((p) => p.user_id !== myId);
 
   const notify = (msg, type = "info") => {
@@ -107,7 +87,7 @@ function App() {
   };
 
   const broadcastNotify = (msg, type = "info") => {
-    notify(msg, type); // On l'affiche pour soi-même
+    notify(msg, type);
     if (channelRef.current) {
       channelRef.current.send({
         type: "broadcast",
@@ -116,7 +96,7 @@ function App() {
       });
     }
   };
-  // NOUVEAU : Le Mégaphone invisible pour synchroniser les écrans instantanément !
+
   const broadcastAction = (action, payload) => {
     if (channelRef.current) {
       channelRef.current.send({
@@ -132,11 +112,6 @@ function App() {
     window.location.reload();
   };
 
-  // ----------------------------------------
-  // 4. BRANCHEMENT DES HOOKS LOGIQUES
-  // ----------------------------------------
-
-  // Hook de gestion du Lobby
   const room = useRoomConnection({
     supabase,
     pseudo,
@@ -155,7 +130,6 @@ function App() {
     notify,
   });
 
-  // Hook des Actions de Jeu
   const actions = useGameActions({
     supabase,
     myId,
@@ -201,7 +175,6 @@ function App() {
     setGameStatus,
   });
 
-  // Hook de Synchronisation Supabase (Temps réel & Événements)
   useSupabaseSync({
     supabase,
     hasSavedSession,
@@ -263,17 +236,12 @@ function App() {
     setActiveAnimation,
   });
 
-  // ----------------------------------------
-  // 5. ROUTAGE DE L'AFFICHAGE (Render)
-  // ----------------------------------------
-
-  if (loading) {
+  if (loading)
     return (
       <LoadingScreen onCancel={room.confirmLeaveGame} onReset={fullReset} />
     );
-  }
 
-  if (view === "login") {
+  if (view === "login")
     return (
       <LoginView
         pseudo={pseudo}
@@ -284,9 +252,8 @@ function App() {
         joinRoom={room.joinRoom}
       />
     );
-  }
 
-  if (view === "lobby") {
+  if (view === "lobby")
     return (
       <LobbyView
         setShowLeaveModal={setShowLeaveModal}
@@ -303,9 +270,8 @@ function App() {
         confirmKick={room.confirmKick}
       />
     );
-  }
 
-  if (view === "finished") {
+  if (view === "finished")
     return (
       <FinishedView
         players={players}
@@ -315,9 +281,8 @@ function App() {
         firstBuilderId={firstBuilderId}
       />
     );
-  }
 
-  if (view === "game") {
+  if (view === "game")
     return (
       <GameView
         players={players}
@@ -351,7 +316,6 @@ function App() {
         abilityUsed={abilityUsed}
         labUsed={labUsed}
         smithyUsed={smithyUsed}
-        // Actions liées au Hook "useGameActions"
         pickCharacter={actions.pickCharacter}
         takeGold={actions.takeGold}
         startDraw={actions.startDraw}
@@ -371,7 +335,6 @@ function App() {
         quitGame={actions.quitGame}
       />
     );
-  }
 
   return null;
 }

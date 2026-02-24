@@ -1,7 +1,3 @@
-// ==========================================
-// 1. DONNÉES DU JEU (Citadelles)
-// ==========================================
-
 export const CHARACTERS = [
   { id: 1, name: "Assassin", color: "gray" },
   { id: 2, name: "Voleur", color: "gray" },
@@ -61,6 +57,8 @@ export const WONDER_DESC = {
 };
 
 export const getCardDesc = (card) => {
-  if (WONDER_DESC[card.name]) return WONDER_DESC[card.name];
-  return `Quartier ${card.color === "yellow" ? "Noble" : card.color === "green" ? "Commerçant" : card.color === "blue" ? "Religieux" : "Militaire"}.`;
+  return (
+    WONDER_DESC[card.name] ||
+    `Quartier ${card.color === "yellow" ? "Noble" : card.color === "green" ? "Commerçant" : card.color === "blue" ? "Religieux" : "Militaire"}.`
+  );
 };

@@ -1,59 +1,53 @@
-import { useState } from "react"; // ⚡ NOUVEAU : Import de useState
+import { useState } from "react";
 import { GLOBAL_STYLES } from "../utils/theme";
 import LeaveButton from "../components/LeaveButton";
 import { playSound } from "../utils/soundManager";
 
-// ==========================================
-// VUE : LobbyView
-// ==========================================
+const LobbyView = (props) => {
+  const {
+    setShowLeaveModal,
+    roomCode,
+    players,
+    onlineIds,
+    roomHostId,
+    myId,
+    setPlayerToKickId,
+    startGame,
+    showLeaveModal,
+    confirmLeaveGame,
+    playerToKickId,
+    confirmKick,
+  } = props;
 
-const LobbyView = ({
-  setShowLeaveModal,
-  roomCode,
-  players,
-  onlineIds,
-  roomHostId,
-  myId,
-  setPlayerToKickId,
-  startGame,
-  showLeaveModal,
-  confirmLeaveGame,
-  playerToKickId,
-  confirmKick,
-}) => {
-  // ⚡ NOUVEAUX ÉTATS : Pour gérer l'attente de la base de données
   const [isLeaving, setIsLeaving] = useState(false);
   const [isKicking, setIsKicking] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
 
-  // La fonction qui intercepte le clic sur "Commencer"
   const handleStart = async () => {
     playSound("wood-button.mp3", 0.6, null);
-    setIsStarting(true); // Lance la cinématique
+    setIsStarting(true);
     try {
-      await startGame(); // La base de données travaille...
+      await startGame();
     } catch (error) {
       console.error(error);
-      setIsStarting(false); // Sécurité
+      setIsStarting(false);
     }
   };
 
-  // ⚡ Fonction pour intercepter le départ
   const handleLeave = async () => {
     playSound("wood-button.mp3", 0.4, null);
-    setIsLeaving(true); // Lance l'animation instantanément !
+    setIsLeaving(true);
     try {
-      await confirmLeaveGame(); // Appelle la base de données
+      await confirmLeaveGame();
     } catch (error) {
       console.error(error);
-      setIsLeaving(false); // Sécurité en cas d'erreur
+      setIsLeaving(false);
     }
   };
 
-  // ⚡ Fonction pour intercepter le bannissement
   const handleKick = async () => {
     playSound("wood-button.mp3", 0.4, null);
-    setIsKicking(true); // Lance l'animation
+    setIsKicking(true);
     try {
       await confirmKick();
     } catch (error) {
@@ -68,12 +62,7 @@ const LobbyView = ({
     <div className="relative min-h-screen flex flex-col items-center justify-center p-4 bg-[url('/background.png')] bg-cover bg-center bg-no-repeat text-amber-50 overflow-hidden">
       <style>
         {GLOBAL_STYLES}
-        {`
-          @keyframes smoothAppear {
-            0% { opacity: 0; transform: scale(0.95); filter: blur(10px); }
-            100% { opacity: 1; transform: scale(1); filter: blur(0px); }
-          }
-        `}
+        {`@keyframes smoothAppear { 0% { opacity: 0; transform: scale(0.95); filter: blur(10px); } 100% { opacity: 1; transform: scale(1); filter: blur(0px); } }`}
       </style>
 
       <div className="absolute inset-0 bg-black/60 backdrop-blur-[3px] z-0"></div>
@@ -88,7 +77,6 @@ const LobbyView = ({
         <LeaveButton onClick={() => setShowLeaveModal(true)} />
       </div>
 
-      {/* CONTENU DU LOBBY */}
       <div
         className={`relative z-10 flex flex-col items-center w-full max-w-lg mt-8 transition-all duration-700 ${isLeaving ? "blur-md opacity-40 scale-95 pointer-events-none" : ""}`}
         style={{
@@ -126,7 +114,6 @@ const LobbyView = ({
                     {p.pseudo}
                   </span>
                 </div>
-
                 <div className="flex items-center gap-3">
                   {p.user_id === roomHostId && (
                     <span className="text-xs bg-amber-900/80 text-amber-300 px-3 py-1.5 rounded border border-amber-700 uppercase font-black tracking-wider shadow-sm">
@@ -148,7 +135,7 @@ const LobbyView = ({
 
           {myId === roomHostId && players.length >= 2 && (
             <button
-              onClick={handleStart} // ⚡ ON UTILISE NOTRE NOUVELLE FONCTION ICI
+              onClick={handleStart}
               className="w-full mt-4 bg-green-800 hover:bg-green-700 text-green-50 p-5 rounded-lg border-b-4 border-green-950 font-black text-2xl uppercase shadow-[0_0_20px_rgba(34,197,94,0.3)] tracking-[0.2em] transition-transform active:scale-95"
             >
               Commencer
@@ -167,9 +154,6 @@ const LobbyView = ({
         </div>
       </div>
 
-      {/* ========================================== */}
-      {/* MODALE : QUITTER LA PARTIE */}
-      {/* ========================================== */}
       {showLeaveModal && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-stone-900 border-4 border-red-900 p-8 rounded-xl text-center shadow-[0_0_50px_rgba(220,38,38,0.4)] max-w-sm w-full mx-4 relative overflow-hidden transition-all duration-500">
@@ -198,7 +182,6 @@ const LobbyView = ({
                 </div>
               </div>
             ) : (
-              // ⚡ ANIMATION DE CHARGEMENT AU DÉPART
               <div className="flex flex-col items-center justify-center py-6 animate-in fade-in zoom-in duration-500">
                 <div className="w-16 h-16 border-4 border-red-500 border-t-transparent rounded-full animate-spin mb-6 shadow-[0_0_15px_rgba(239,68,68,0.5)]"></div>
                 <h2 className="text-xl font-black text-red-400 tracking-widest uppercase drop-shadow-md animate-pulse">
@@ -210,9 +193,6 @@ const LobbyView = ({
         </div>
       )}
 
-      {/* ========================================== */}
-      {/* MODALE : BANNIR UN JOUEUR */}
-      {/* ========================================== */}
       {playerToKickId && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-stone-900 border-4 border-red-900 p-8 rounded-xl text-center shadow-[0_0_50px_rgba(220,38,38,0.4)] max-w-sm w-full mx-4 transition-all duration-500">
@@ -244,7 +224,6 @@ const LobbyView = ({
                 </div>
               </div>
             ) : (
-              // ⚡ ANIMATION DE CHARGEMENT AU BANNISSEMENT
               <div className="flex flex-col items-center justify-center py-6 animate-in fade-in zoom-in duration-500">
                 <div className="w-16 h-16 border-4 border-red-500 border-t-transparent rounded-full animate-spin mb-6 shadow-[0_0_15px_rgba(239,68,68,0.5)]"></div>
                 <h2 className="text-xl font-black text-red-400 tracking-widest uppercase drop-shadow-md animate-pulse">
@@ -256,9 +235,6 @@ const LobbyView = ({
         </div>
       )}
 
-      {/* ========================================== */}
-      {/* CINÉMATIQUE : DÉMARRAGE DE LA PARTIE */}
-      {/* ========================================== */}
       {isStarting && (
         <div className="fixed inset-0 z-[20000] flex flex-col items-center justify-center bg-gradient-to-b from-stone-900 to-black animate-in fade-in duration-700">
           <div className="w-24 h-24 border-4 border-amber-500 border-t-transparent border-b-transparent rounded-full animate-spin mb-8 shadow-[0_0_30px_rgba(245,158,11,0.3)]"></div>

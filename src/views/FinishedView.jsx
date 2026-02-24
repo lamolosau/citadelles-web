@@ -1,11 +1,7 @@
 import { GLOBAL_STYLES } from "../utils/theme";
 import { calculateScore } from "../utils/gameLogic";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { playCrossfadeLoop } from "../utils/soundManager";
-
-// ==========================================
-// VUE : FinishedView
-// ==========================================
 
 const FinishedView = ({
   players,
@@ -15,22 +11,18 @@ const FinishedView = ({
   firstBuilderId,
 }) => {
   useEffect(() => {
-    // Lance "winloop.mp3", avec un volume max de 0.4, et un fondu de 2 secondes (2000 ms)
     const victoryMusic = playCrossfadeLoop("winloop.mp3", 0.4, 2000);
-
-    // Nettoyage si on quitte la page
     return () => {
-      if (victoryMusic) {
-        victoryMusic.stop(); // ⚡ Coupe les deux platines en même temps
-      }
+      if (victoryMusic) victoryMusic.stop();
     };
   }, []);
-  // On trie les joueurs du plus grand score au plus petit
-  // On passe `firstBuilderId` à la fonction pour qu'elle sache qui a fini en premier
-  const sortedPlayers = [...players].sort(
-    (a, b) =>
-      calculateScore(b, firstBuilderId) - calculateScore(a, firstBuilderId),
-  );
+
+  // ⚡ OPTIMISATION : On pré-calcule le score une seule fois par joueur pour éviter les recalculs massifs
+  const scoredPlayers = useMemo(() => {
+    return players
+      .map((p) => ({ ...p, score: calculateScore(p, firstBuilderId) }))
+      .sort((a, b) => b.score - a.score);
+  }, [players, firstBuilderId]);
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-10 bg-gradient-to-b from-stone-900 to-black text-amber-50">
@@ -40,20 +32,14 @@ const FinishedView = ({
       </h2>
       <div className="bg-stone-900/90 p-8 rounded-lg border-4 border-amber-800 w-full max-w-2xl shadow-2xl">
         <div className="space-y-4">
-          {sortedPlayers.map((p, i) => (
+          {scoredPlayers.map((p, i) => (
             <div
               key={p.id}
-              className={`flex justify-between items-center p-4 rounded border-2 ${
-                i === 0
-                  ? "bg-amber-900/40 border-amber-500"
-                  : "bg-stone-800/50 border-stone-700"
-              }`}
+              className={`flex justify-between items-center p-4 rounded border-2 ${i === 0 ? "bg-amber-900/40 border-amber-500" : "bg-stone-800/50 border-stone-700"}`}
             >
               <div className="flex items-center gap-4">
                 <span
-                  className={`text-4xl font-bold ${
-                    i === 0 ? "text-amber-400" : "text-stone-500"
-                  }`}
+                  className={`text-4xl font-bold ${i === 0 ? "text-amber-400" : "text-stone-500"}`}
                 >
                   #{i + 1}
                 </span>
@@ -65,7 +51,7 @@ const FinishedView = ({
                 </div>
               </div>
               <span className="text-4xl font-black text-amber-100">
-                {calculateScore(p, firstBuilderId)} pts
+                {p.score} pts
               </span>
             </div>
           ))}
