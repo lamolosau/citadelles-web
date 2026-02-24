@@ -368,6 +368,7 @@ function App() {
         endTurn={actions.endTurn}
         forceNextTurn={actions.forceNextTurn}
         activeAnimation={activeAnimation}
+        quitGame={actions.quitGame}
       />
     );
   }

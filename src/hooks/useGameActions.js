@@ -758,6 +758,30 @@ export const useGameActions = ({
     }
   };
 
+  const quitGame = async () => {
+    if (actionLockRef.current || isActionPending) return;
+    actionLockRef.current = true;
+    setIsActionPending(true);
+    try {
+      // 1. On supprime définitivement le joueur de la partie dans la BDD
+      await supabase
+        .from("players")
+        .delete()
+        .eq("user_id", myId)
+        .eq("room_id", roomId);
+
+      // 2. On rafraîchit la page pour le ramener à l'écran de Login/Lobby
+      // (C'est la méthode la plus robuste pour réinitialiser tous les états locaux React)
+      window.location.reload();
+    } catch (error) {
+      console.error(error);
+      notify("Erreur lors de la tentative de fuite...", "error");
+    } finally {
+      actionLockRef.current = false;
+      setIsActionPending(false);
+    }
+  };
+
   return {
     rebuildDeckIfNeeded,
     pickCharacter,
@@ -775,5 +799,6 @@ export const useGameActions = ({
     endTurn,
     forceNextTurn,
     collectCharacterIncome,
+    quitGame,
   };
 };
