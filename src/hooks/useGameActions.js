@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { playSound } from "../utils/soundManager";
 import { CHARACTERS, DISTRICTS } from "../data/gameData";
 import { shuffle, removeOne, DISTRICT_MAP } from "../utils/gameLogic";
@@ -47,19 +47,22 @@ export const useGameActions = (props) => {
     broadcastNotify,
     broadcastAction,
     setActiveAnimation,
+    setPlayers,
+    setKilledId,
+    setRobbedId,
+    setKingPlayerId,
   } = props;
 
   const actionLockRef = useRef(false);
+  const [animatingDraftCard, setAnimatingDraftCard] = useState(null);
 
   const rebuildDeckIfNeeded = async (currentStack, neededCount) => {
     if (currentStack.length >= neededCount) return currentStack;
-
     const { data: allPlayers } = await supabase
       .from("players")
       .select("hand, city")
       .eq("room_id", roomId);
     const countsInPlay = {};
-
     currentStack.forEach(
       (id) => (countsInPlay[id] = (countsInPlay[id] || 0) + 1),
     );
@@ -73,155 +76,179 @@ export const useGameActions = (props) => {
         );
       });
     }
-
     const discarded = [];
     DISTRICTS.forEach((card) => {
       const total = card.qty || 1;
       const used = countsInPlay[card.id] || 0;
       for (let i = 0; i < total - used; i++) discarded.push(card.id);
     });
-
     return [...currentStack, ...shuffle(discarded)];
   };
 
   const pickCharacter = async (cid) => {
-    if (
-      actionLockRef.current ||
-      isActionPending ||
-      players[currentPlayerIndex]?.user_id !== myId
-    )
+    if (actionLockRef.current || players[currentPlayerIndex]?.user_id !== myId)
       return;
+    const me = players.find((p) => p.user_id === myId);
+    if ((me?.characters || []).includes(cid)) return;
 
     actionLockRef.current = true;
-    setIsActionPending(true);
 
-    try {
-      const me = players.find((p) => p.user_id === myId);
-      if ((me?.characters || []).includes(cid)) return;
+    const count = players.length;
+    let remaining = draftPile.filter((c) => c.id !== cid);
+    const kingIdx = players.findIndex((p) => p.user_id === kingPlayerId);
+    const safeStart = kingIdx !== -1 ? kingIdx : 0;
 
-      const count = players.length;
-      const remaining = draftPile.filter((c) => c.id !== cid);
-      let updateRoom = {};
-      const promises = [];
+    let isDraftOver = false;
+    let nextIdx = currentPlayerIndex;
+    let nextStep = draftSubStep;
 
-      setDraftPile(remaining);
-
-      if (count === 2) {
-        const kingIdx = players.findIndex((p) => p.user_id === kingPlayerId);
-        const p1Idx = kingIdx !== -1 ? kingIdx : 0;
-        const p2Idx = (p1Idx + 1) % 2;
-
-        if ([6, 5, 3, 1].includes(remaining.length)) {
-          promises.push(
-            supabase
-              .from("players")
-              .update({ characters: [...(me.characters || []), cid] })
-              .eq("user_id", myId)
-              .eq("room_id", roomId),
-          );
-        }
-
-        if (remaining.length === 1) {
-          setGameStatus("playing");
-          setCurrentTurnNumber(1);
-          setTurnPhase("resource");
-          updateRoom = {
-            status: "playing",
-            draft_pile: [],
-            current_character_turn: 1,
-          };
-        } else {
-          let nextIdx = currentPlayerIndex;
-          let nextStep = draftSubStep;
-
-          if (remaining.length === 6) {
-            nextIdx = p2Idx;
-            nextStep = "pick";
-          } else if (remaining.length === 5) {
-            nextIdx = p2Idx;
-            nextStep = "discard";
-          } else if (remaining.length === 4) {
-            nextIdx = p1Idx;
-            nextStep = "pick";
-          } else if (remaining.length === 3) {
-            nextIdx = p1Idx;
-            nextStep = "discard";
-          } else if (remaining.length === 2) {
-            nextIdx = p2Idx;
-            nextStep = "pick";
-          }
-
-          setCurrentPlayerIndex(nextIdx);
-          setDraftSubStep(nextStep);
-          updateRoom = {
-            draft_pile: remaining,
-            current_player_index: nextIdx,
-            draft_sub_step: nextStep,
-          };
-        }
-      } else {
-        promises.push(
-          supabase
-            .from("players")
-            .update({ characters: [...(me.characters || []), cid] })
-            .eq("user_id", myId)
-            .eq("room_id", roomId),
-        );
-
-        const nextIdx = (currentPlayerIndex + 1) % count;
-        const safeStart =
-          players.findIndex((p) => p.user_id === kingPlayerId) !== -1
-            ? players.findIndex((p) => p.user_id === kingPlayerId)
-            : 0;
-
-        if (
-          (count === 3 && remaining.length === 1) ||
-          (count > 3 && nextIdx === safeStart)
-        ) {
-          setGameStatus("playing");
-          setCurrentTurnNumber(1);
-          setTurnPhase("resource");
-          updateRoom = {
-            status: "playing",
-            draft_pile: [],
-            current_character_turn: 1,
-          };
-        } else {
-          setCurrentPlayerIndex(nextIdx);
-          updateRoom = { draft_pile: remaining, current_player_index: nextIdx };
-        }
+    if (count === 2) {
+      const p1Idx = safeStart;
+      const p2Idx = (p1Idx + 1) % 2;
+      if (remaining.length === 6) {
+        nextIdx = p2Idx;
+        nextStep = "pick";
+      } else if (remaining.length === 5) {
+        nextIdx = p2Idx;
+        nextStep = "discard";
+      } else if (remaining.length === 4) {
+        nextIdx = p1Idx;
+        nextStep = "pick";
+      } else if (remaining.length === 3) {
+        nextIdx = p1Idx;
+        nextStep = "discard";
+      } else if (remaining.length === 2) {
+        nextIdx = p2Idx;
+        nextStep = "pick";
+      } else if (remaining.length === 1) {
+        isDraftOver = true;
+        remaining = [];
+      } else if (remaining.length === 0) {
+        isDraftOver = true;
       }
-
-      promises.push(supabase.from("rooms").update(updateRoom).eq("id", roomId));
-      await Promise.all(promises);
-    } finally {
-      actionLockRef.current = false;
-      setIsActionPending(false);
+    } else if (count >= 3 && count <= 6) {
+      if (remaining.length === 1) {
+        nextIdx = currentPlayerIndex;
+        nextStep = "discard";
+      } else if (remaining.length === 0) {
+        isDraftOver = true;
+      } else {
+        nextIdx = (currentPlayerIndex + 1) % count;
+        nextStep = "pick";
+      }
+    } else if (count === 7) {
+      if (
+        remaining.length === 1 &&
+        currentPlayerIndex === (safeStart + 5) % 7
+      ) {
+        nextIdx = (currentPlayerIndex + 1) % 7;
+        nextStep = "pick";
+      } else if (
+        remaining.length === 1 &&
+        currentPlayerIndex === (safeStart + 6) % 7
+      ) {
+        nextIdx = currentPlayerIndex;
+        nextStep = "discard";
+      } else if (remaining.length === 0) {
+        isDraftOver = true;
+      } else {
+        nextIdx = (currentPlayerIndex + 1) % 7;
+        nextStep = "pick";
+      }
+    } else if (count === 8) {
+      if (remaining.length === 0) isDraftOver = true;
+      else {
+        nextIdx = (currentPlayerIndex + 1) % count;
+        nextStep = "pick";
+      }
     }
+
+    const isPick = draftSubStep === "pick";
+    const nextPlayers = players.map((p) => ({ ...p }));
+    if (isPick) {
+      const pIdx = nextPlayers.findIndex((p) => p.user_id === myId);
+      if (pIdx !== -1) {
+        nextPlayers[pIdx].characters = [
+          ...(nextPlayers[pIdx].characters || []),
+          cid,
+        ];
+      }
+    }
+
+    supabase.functions
+      .invoke("game-action", {
+        body: {
+          action: "PICK_CHARACTER",
+          roomId,
+          payload: {
+            characterId: cid,
+            remaining,
+            nextIdx,
+            nextStep,
+            isDraftOver,
+            isPick,
+          },
+        },
+      })
+      .catch(console.error);
+
+    setDraftPile(remaining);
+    if (setPlayers) setPlayers(nextPlayers);
+
+    if (isDraftOver) {
+      setGameStatus("playing");
+      setCurrentTurnNumber(1);
+      setTurnPhase("resource");
+    } else {
+      setCurrentPlayerIndex(nextIdx);
+      setDraftSubStep(nextStep);
+    }
+
+    broadcastAction("sync_draft", {
+      draftPile: remaining,
+      currentPlayerIndex: nextIdx,
+      draftSubStep: nextStep,
+      isDraftOver,
+      optimisticPlayers: nextPlayers,
+    });
+
+    actionLockRef.current = false;
+  };
+
+  const pickDrawnCard = async (cid) => {
+    if (actionLockRef.current) return;
+    actionLockRef.current = true;
+
+    const rejected = removeOne(drawOptions, cid);
+    supabase.functions
+      .invoke("game-action", {
+        body: {
+          action: "PICK_DRAWN_CARD",
+          roomId: roomId,
+          payload: { pickedId: cid, rejectedIds: rejected },
+        },
+      })
+      .catch(console.error);
+
+    setDrawOptions([]);
+    setTurnPhase("build");
+    actionLockRef.current = false;
   };
 
   const takeGold = async () => {
-    if (actionLockRef.current || isActionPending) return;
+    if (actionLockRef.current) return;
     actionLockRef.current = true;
-    setIsActionPending(true);
-    try {
-      const me = players.find((p) => p.user_id === myId);
-      setTurnPhase("build");
-      await Promise.all([
-        supabase
-          .from("players")
-          .update({ gold: (me.gold || 0) + 2 })
-          .eq("user_id", myId)
-          .eq("room_id", roomId),
-        supabase
-          .from("rooms")
-          .update({ current_turn_phase: "build" })
-          .eq("id", roomId),
-      ]);
-    } finally {
+    setTurnPhase("build");
+    if (setPlayers)
+      setPlayers((prev) =>
+        prev.map((p) => (p.user_id === myId ? { ...p, gold: p.gold + 2 } : p)),
+      );
+    supabase.functions
+      .invoke("game-action", { body: { action: "TAKE_GOLD", roomId: roomId } })
+      .catch(console.error);
+    setTimeout(() => {
       actionLockRef.current = false;
-      setIsActionPending(false);
-    }
+    }, 200);
   };
 
   const startDraw = async () => {
@@ -229,72 +256,12 @@ export const useGameActions = (props) => {
     actionLockRef.current = true;
     setIsActionPending(true);
     try {
-      const me = players.find((p) => p.user_id === myId);
-      const { data: r } = await supabase
-        .from("rooms")
-        .select("district_stack")
-        .eq("id", roomId)
-        .single();
-
-      let s = r.district_stack || [];
-      const hasObs = (me.city || []).some(
-        (id) => DISTRICT_MAP[id]?.name === "Observatoire",
-      );
-      const count = hasObs ? 3 : 2;
-
-      s = await rebuildDeckIfNeeded(s, count);
-      if (s.length < count) return notify("La pioche est épuisée !", "error");
-
-      const opts = s.splice(0, count);
-      setDrawOptions(opts);
+      const { data, error } = await supabase.functions.invoke("game-action", {
+        body: { action: "START_DRAW", roomId: roomId },
+      });
+      if (error || data?.error) return notify("Impossible de piocher", "error");
+      setDrawOptions(data.drawOptions);
       setTurnPhase("drawing");
-      await supabase
-        .from("rooms")
-        .update({ district_stack: s, current_turn_phase: "drawing" })
-        .eq("id", roomId);
-    } finally {
-      actionLockRef.current = false;
-      setIsActionPending(false);
-    }
-  };
-
-  const pickDrawnCard = async (cid) => {
-    if (actionLockRef.current || isActionPending) return;
-    actionLockRef.current = true;
-    setIsActionPending(true);
-    try {
-      const me = players.find((p) => p.user_id === myId);
-      const hasLibrary = (me.city || []).some(
-        (id) => DISTRICT_MAP[id]?.name === "Bibliothèque",
-      );
-      const kept = hasLibrary ? drawOptions : [cid];
-      const rejected = hasLibrary ? [] : removeOne(drawOptions, cid);
-      const { data: r } = await supabase
-        .from("rooms")
-        .select("district_stack")
-        .eq("id", roomId)
-        .single();
-
-      setDrawOptions([]);
-      setTurnPhase("build");
-
-      if (hasLibrary)
-        notify("Bibliothèque : Vous gardez toutes les cartes !", "success");
-
-      await Promise.all([
-        supabase
-          .from("rooms")
-          .update({
-            district_stack: [...(r.district_stack || []), ...rejected],
-            current_turn_phase: "build",
-          })
-          .eq("id", roomId),
-        supabase
-          .from("players")
-          .update({ hand: [...(me.hand || []), ...kept] })
-          .eq("user_id", myId)
-          .eq("room_id", roomId),
-      ]);
     } finally {
       actionLockRef.current = false;
       setIsActionPending(false);
@@ -302,47 +269,170 @@ export const useGameActions = (props) => {
   };
 
   const buildDistrict = async (cid) => {
-    if (actionLockRef.current || isActionPending) return;
+    if (actionLockRef.current) return;
     actionLockRef.current = true;
-    setIsActionPending(true);
-    try {
-      const me = playersRef.current.find((p) => p.user_id === myIdRef.current);
-      if (!me) return;
-
-      const c = DISTRICT_MAP[cid];
-      if (me.gold < c.cost) return notify("Pas assez d'or !", "error");
-
-      const limit = currentTurnNumber === 7 ? 3 : 1;
-      if (buildsCount >= limit) return notify("Limite atteinte !", "error");
-
-      const newCity = [...(me.city || []), cid];
-      setBuildsCount((p) => p + 1);
-      notify(`Construction : ${c.name}`, "success");
-
-      const promises = [
-        supabase
-          .from("players")
-          .update({
-            city: newCity,
-            hand: removeOne(me.hand || [], cid),
-            gold: me.gold - c.cost,
-          })
-          .eq("user_id", myId)
-          .eq("room_id", roomId),
-      ];
-      if (newCity.length >= 8 && !firstBuilderId)
-        promises.push(
-          supabase
-            .from("rooms")
-            .update({ first_builder_id: myId })
-            .eq("id", roomId),
-        );
-
-      await Promise.all(promises);
-    } finally {
+    const c = DISTRICT_MAP[cid];
+    const me = playersRef.current.find((p) => p.user_id === myIdRef.current);
+    if (me.gold < c.cost) {
       actionLockRef.current = false;
-      setIsActionPending(false);
+      return notify("Pas assez d'or !", "error");
     }
+    const limit = currentTurnNumber === 7 ? 3 : 1;
+    if (buildsCount >= limit) {
+      actionLockRef.current = false;
+      return notify("Limite atteinte !", "error");
+    }
+
+    setBuildsCount((p) => p + 1);
+    if (setPlayers) {
+      setPlayers((prev) =>
+        prev.map((p) =>
+          p.user_id === myId
+            ? {
+                ...p,
+                gold: p.gold - c.cost,
+                city: [...(p.city || []), cid],
+                hand: removeOne(p.hand || [], cid),
+              }
+            : p,
+        ),
+      );
+    }
+    notify(`Construction : ${c.name}`, "success");
+    supabase.functions
+      .invoke("game-action", {
+        body: {
+          action: "BUILD_DISTRICT",
+          roomId: roomId,
+          payload: { districtId: cid },
+        },
+      })
+      .catch(console.error);
+    setTimeout(() => {
+      actionLockRef.current = false;
+    }, 300);
+  };
+
+  const assassinKill = async (tid) => {
+    if (actionLockRef.current) return;
+    actionLockRef.current = true;
+    if (setKilledId) setKilledId(tid);
+    setTurnPhase("resource");
+    const animData = { type: "assassin_kill", sourceId: myId, targetId: tid };
+    setActiveAnimation(animData);
+    setTimeout(() => setActiveAnimation(null), 2500);
+    broadcastAction("play_animation", { data: animData });
+    supabase.functions
+      .invoke("game-action", {
+        body: {
+          action: "ASSASSIN_KILL",
+          roomId: roomId,
+          payload: { targetId: tid },
+        },
+      })
+      .catch(console.error);
+    setTimeout(() => {
+      actionLockRef.current = false;
+    }, 1000);
+  };
+
+  const thiefRob = async (tid) => {
+    if (actionLockRef.current) return;
+    actionLockRef.current = true;
+    if (setRobbedId) setRobbedId(tid);
+    setTurnPhase("resource");
+    const animData = { type: "thief_rob", sourceId: myId, targetId: tid };
+    setActiveAnimation(animData);
+    setTimeout(() => setActiveAnimation(null), 2500);
+    broadcastAction("play_animation", { data: animData });
+    supabase.functions
+      .invoke("game-action", {
+        body: {
+          action: "THIEF_ROB",
+          roomId: roomId,
+          payload: { targetId: tid },
+        },
+      })
+      .catch(console.error);
+    setTimeout(() => {
+      actionLockRef.current = false;
+    }, 1000);
+  };
+
+  const applyOptimisticTurn = (next) => {
+    let nextPlayers = players.map((p) => ({ ...p }));
+    let nextKingId = kingPlayerId;
+
+    if (next === 4) {
+      const kingOwner = nextPlayers.find((p) =>
+        (p.characters || []).includes(4),
+      );
+      if (kingOwner) nextKingId = kingOwner.user_id;
+    }
+
+    if (killedId !== next) {
+      if (robbedId === next) {
+        const thief = nextPlayers.find((p) => (p.characters || []).includes(2));
+        const victim = nextPlayers.find((p) =>
+          (p.characters || []).includes(next),
+        );
+        if (thief && victim && victim.gold > 0) {
+          thief.gold += victim.gold;
+          victim.gold = 0;
+        }
+      }
+      if (next === 6) {
+        const merchant = nextPlayers.find((p) =>
+          (p.characters || []).includes(6),
+        );
+        if (merchant) merchant.gold += 1;
+      }
+    }
+
+    setCurrentTurnNumber(next);
+    setTurnPhase("resource");
+    if (setPlayers) setPlayers(nextPlayers);
+    if (setKingPlayerId) {
+      setKingPlayerId(nextKingId);
+      if (kingPlayerIdRef) kingPlayerIdRef.current = nextKingId;
+    }
+
+    broadcastAction("next_turn", {
+      turn: next,
+      optimisticPlayers: nextPlayers,
+      optimisticKing: nextKingId,
+    });
+  };
+
+  const endTurn = async () => {
+    if (actionLockRef.current) return;
+    actionLockRef.current = true;
+    playSound("wood-button.mp3", 0.4, null);
+    const next = currentTurnNumber + 1;
+    if (next <= 8) applyOptimisticTurn(next);
+    supabase.functions
+      .invoke("game-action", {
+        body: { action: "ADVANCE_TURN", roomId, payload: { isEndTurn: true } },
+      })
+      .catch(console.error);
+    setTimeout(() => {
+      actionLockRef.current = false;
+    }, 300);
+  };
+
+  const forceNextTurn = async () => {
+    if (actionLockRef.current) return;
+    actionLockRef.current = true;
+    const next = currentTurnNumber + 1;
+    if (next <= 8) applyOptimisticTurn(next);
+    supabase.functions
+      .invoke("game-action", {
+        body: { action: "ADVANCE_TURN", roomId, payload: { isEndTurn: false } },
+      })
+      .catch(console.error);
+    setTimeout(() => {
+      actionLockRef.current = false;
+    }, 300);
   };
 
   const destroyDistrict = async (targetPlayerId, districtId, cost) => {
@@ -353,7 +443,6 @@ export const useGameActions = (props) => {
       const me = players.find((p) => p.user_id === myId);
       const target = players.find((p) => p.user_id === targetPlayerId);
       const isBishop = (target.characters || []).includes(5);
-
       if (isBishop && killedId !== 5)
         return notify("L'Évêque est protégé par l'Église.", "error");
 
@@ -361,7 +450,6 @@ export const useGameActions = (props) => {
         (id) => DISTRICT_MAP[id]?.name === "Grande Muraille",
       );
       const destCost = cost - 1 + (hasGreatWall ? 1 : 0);
-
       if (me.gold < destCost)
         return notify(
           hasGreatWall ? "Grande Muraille : Coût +1 Or !" : "Pas assez d'or !",
@@ -433,7 +521,6 @@ export const useGameActions = (props) => {
     try {
       const me = players.find((p) => p.user_id === myId);
       if (me.gold < 2) return notify("Pas assez d'or pour la Forge !", "error");
-
       const { data: r } = await supabase
         .from("rooms")
         .select("district_stack")
@@ -442,7 +529,6 @@ export const useGameActions = (props) => {
       let s = r.district_stack || [];
       s = await rebuildDeckIfNeeded(s, 3);
       if (s.length < 3) return notify("Pioche épuisée pour la Forge.", "error");
-
       const drawn = s.splice(0, 3);
       setSmithyUsed(true);
       notify("Forge : 3 Cartes forgées !", "success");
@@ -467,7 +553,6 @@ export const useGameActions = (props) => {
     try {
       const me = players.find((p) => p.user_id === myId);
       const target = players.find((p) => p.user_id === tid);
-
       setMagicMode(null);
       setAbilityUsed(true);
 
@@ -516,7 +601,6 @@ export const useGameActions = (props) => {
         .select("district_stack")
         .eq("id", roomId)
         .single();
-
       let stack = r.district_stack || [];
       stack = await rebuildDeckIfNeeded(stack, magicSelectedCards.length);
       if (stack.length < magicSelectedCards.length)
@@ -557,155 +641,6 @@ export const useGameActions = (props) => {
       actionLockRef.current = false;
       setIsActionPending(false);
     }
-  };
-
-  const thiefRob = async (tid) => {
-    if (actionLockRef.current || isActionPending) return;
-    actionLockRef.current = true;
-    setIsActionPending(true);
-    try {
-      const me = players.find((p) => p.user_id === myId);
-      if (me && (me.characters || []).includes(tid))
-        return notify("Auto-vol interdit !", "error");
-      if (tid === killedId) return notify("Déjà mort !", "error");
-      if (tid === 1) return notify("Impossible !", "error");
-
-      setTurnPhase("resource");
-      const animData = { type: "thief_rob", sourceId: myId, targetId: tid };
-      setActiveAnimation(animData);
-      setTimeout(() => setActiveAnimation(null), 2500);
-      broadcastAction("play_animation", { data: animData });
-      await supabase
-        .from("rooms")
-        .update({ robbed_char_id: tid })
-        .eq("id", roomId);
-    } finally {
-      actionLockRef.current = false;
-      setIsActionPending(false);
-    }
-  };
-
-  const assassinKill = async (tid) => {
-    if (actionLockRef.current || isActionPending) return;
-    actionLockRef.current = true;
-    setIsActionPending(true);
-    try {
-      const me = playersRef.current.find((p) => p.user_id === myIdRef.current);
-      if (me && (me.characters || []).includes(tid))
-        return notify("Suicide interdit !", "error");
-
-      setTurnPhase("resource");
-      const animData = { type: "assassin_kill", sourceId: myId, targetId: tid };
-      setActiveAnimation(animData);
-      setTimeout(() => setActiveAnimation(null), 2500);
-      broadcastAction("play_animation", { data: animData });
-      await supabase
-        .from("rooms")
-        .update({ killed_char_id: tid })
-        .eq("id", roomId);
-    } finally {
-      actionLockRef.current = false;
-      setIsActionPending(false);
-    }
-  };
-
-  const forceNextTurn = async () => {
-    const next = currentTurnNumber + 1;
-    if (next > 8) {
-      setGameStatus("drafting");
-      const { data: ps } = await supabase
-        .from("players")
-        .select("*")
-        .eq("room_id", roomId);
-      if (ps.some((p) => (p.city || []).length >= 8)) {
-        await supabase
-          .from("rooms")
-          .update({ status: "finished" })
-          .eq("id", roomId);
-      } else {
-        const { data: r } = await supabase
-          .from("rooms")
-          .select("district_stack")
-          .eq("id", roomId)
-          .single();
-        await prepareDraft(r.district_stack);
-      }
-    } else {
-      setCurrentTurnNumber(next);
-      setTurnPhase("resource");
-      broadcastAction("next_turn", { turn: next });
-      await supabase
-        .from("rooms")
-        .update({
-          current_character_turn: next,
-          current_turn_phase: "resource",
-        })
-        .eq("id", roomId);
-    }
-  };
-
-  const endTurn = async () => {
-    if (actionLockRef.current || isActionPending) return;
-    actionLockRef.current = true;
-    setIsActionPending(true);
-    playSound("wood-button.mp3", 0.4, null);
-    try {
-      const me = players.find((p) => p.user_id === myId);
-      await Promise.all([
-        supabase
-          .from("players")
-          .update({
-            played_characters: [
-              ...(me.played_characters || []),
-              currentTurnNumber,
-            ],
-          })
-          .eq("user_id", myId)
-          .eq("room_id", roomId),
-        forceNextTurn(),
-      ]);
-    } finally {
-      actionLockRef.current = false;
-      setIsActionPending(false);
-    }
-  };
-
-  const prepareDraft = async (stack) => {
-    const pc = playersRef.current.length;
-    let c = shuffle([...CHARACTERS]);
-    const fd = c.pop();
-    let fuCount = pc === 4 ? 2 : pc === 5 ? 1 : 0;
-    const fu = c.splice(0, fuCount);
-
-    await Promise.all([
-      supabase
-        .from("players")
-        .update({ characters: [], played_characters: [] })
-        .eq("room_id", roomId),
-      supabase
-        .from("rooms")
-        .update({
-          status: "drafting",
-          district_stack: stack || [],
-          draft_pile: c,
-          face_down_char: fd.id,
-          face_up_chars: fu,
-          current_player_index:
-            playersRef.current.findIndex(
-              (p) => p.user_id === kingPlayerIdRef.current,
-            ) === -1
-              ? 0
-              : playersRef.current.findIndex(
-                  (p) => p.user_id === kingPlayerIdRef.current,
-                ),
-          current_character_turn: 1,
-          draft_sub_step: "pick",
-          killed_char_id: null,
-          robbed_char_id: null,
-          current_turn_phase: "resource",
-        })
-        .eq("id", roomId),
-    ]);
   };
 
   const collectCharacterIncome = async () => {
@@ -764,5 +699,6 @@ export const useGameActions = (props) => {
     forceNextTurn,
     collectCharacterIncome,
     quitGame,
+    animatingDraftCard: null,
   };
 };

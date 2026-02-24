@@ -56,11 +56,9 @@ export const useSupabaseSync = (props) => {
     setIncomeCollected,
     setShowLabModal,
     setTurnStartIncome,
-    turnStartIncome,
-    rebuildDeckIfNeeded,
-    forceNextTurn,
     channelRef,
     setActiveAnimation,
+    setFaceUpChars,
   } = props;
 
   useEffect(() => {
@@ -70,34 +68,49 @@ export const useSupabaseSync = (props) => {
       const sR = localStorage.getItem("citadelles_room_id");
       const sP = localStorage.getItem("citadelles_player_id");
 
-      const { data: rm } = await supabase
-        .from("rooms")
-        .select("*")
-        .eq("id", sR)
-        .maybeSingle();
-      const { data: p } = await supabase
-        .from("players")
-        .select("*")
-        .eq("user_id", sP)
-        .eq("room_id", sR)
-        .maybeSingle();
-
-      if (rm && p) {
-        setMyId(sP);
-        setRoomId(sR);
-        setRoomCode(rm.code);
-        setPseudo(p.pseudo);
-        setView(
-          rm.status === "waiting"
-            ? "lobby"
-            : rm.status === "finished"
-              ? "finished"
-              : "game",
-        );
-      } else {
-        localStorage.clear();
+      if (!sR || !sP) {
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+
+      try {
+        const { data: rm, error: errRm } = await supabase
+          .from("rooms")
+          .select("*")
+          .eq("id", sR)
+          .maybeSingle();
+        const { data: p, error: errP } = await supabase
+          .from("players")
+          .select("*")
+          .eq("user_id", sP)
+          .eq("room_id", sR)
+          .maybeSingle();
+
+        if (errRm || errP) {
+          console.warn("Erreur réseau ignorée.");
+          return;
+        }
+
+        if (rm && p) {
+          setMyId(sP);
+          setRoomId(sR);
+          setRoomCode(rm.code);
+          setPseudo(p.pseudo);
+          setView(
+            rm.status === "waiting"
+              ? "lobby"
+              : rm.status === "finished"
+                ? "finished"
+                : "game",
+          );
+        } else {
+          localStorage.clear();
+        }
+      } catch (err) {
+        console.warn(err);
+      } finally {
+        setLoading(false);
+      }
     };
     init();
   }, [
@@ -109,53 +122,6 @@ export const useSupabaseSync = (props) => {
     setRoomCode,
     setPseudo,
     setView,
-  ]);
-
-  useEffect(() => {
-    if (
-      gameStatus !== "waiting" &&
-      gameStatus !== "finished" &&
-      players.length === 1 &&
-      !loading
-    ) {
-      const timer = setTimeout(() => {
-        notify("Plus d'adversaires ! Retour au lobby...", "error");
-        backToLobby();
-      }, 3000);
-      return () => clearTimeout(timer);
-    }
-
-    const ghostInterval = setInterval(() => {
-      if (myId === roomHostId && players.length > 0 && onlineIds.length > 0) {
-        players.forEach((p) => {
-          if (p.user_id !== myId && !onlineIds.includes(p.user_id)) {
-            if (!ghostTimersRef.current[p.user_id])
-              ghostTimersRef.current[p.user_id] = Date.now();
-            else if (Date.now() - ghostTimersRef.current[p.user_id] > 15000) {
-              supabase
-                .from("players")
-                .delete()
-                .eq("user_id", p.user_id)
-                .eq("room_id", roomId)
-                .then();
-            }
-          } else delete ghostTimersRef.current[p.user_id];
-        });
-      }
-    }, 2000);
-    return () => clearInterval(ghostInterval);
-  }, [
-    myId,
-    roomId,
-    roomHostId,
-    players,
-    onlineIds,
-    gameStatus,
-    loading,
-    notify,
-    backToLobby,
-    supabase,
-    ghostTimersRef,
   ]);
 
   useEffect(() => {
@@ -174,7 +140,21 @@ export const useSupabaseSync = (props) => {
       const r = rRes.data;
 
       if (ps.length > 0) {
-        setPlayers(ps);
+        setPlayers((prev) => {
+          if (r.status === "drafting") {
+            const prevCount = prev.reduce(
+              (acc, p) => acc + (p.characters || []).length,
+              0,
+            );
+            const dbCount = ps.reduce(
+              (acc, p) => acc + (p.characters || []).length,
+              0,
+            );
+            if (dbCount < prevCount && dbCount !== 0) return prev;
+          }
+          return ps;
+        });
+
         if (myId && !ps.find((p) => p.user_id === myId)) {
           localStorage.clear();
           setRoomId(null);
@@ -182,7 +162,7 @@ export const useSupabaseSync = (props) => {
           setPlayers([]);
           setView("login");
           setLoading(false);
-          notify("Vous avez été exclu par l'hôte.", "error");
+          notify("Vous avez été exclu.", "error");
           return;
         }
       }
@@ -194,52 +174,72 @@ export const useSupabaseSync = (props) => {
               .from("rooms")
               .update({ host_id: ps[0].user_id })
               .eq("id", roomId);
-            notify("L'hôte a quitté. Vous êtes le nouvel hôte !", "gold");
+            notify("Vous êtes le nouvel hôte !", "gold");
           }
-        }
-
-        if (r.king_player_id && r.king_player_id !== kingPlayerIdRef.current) {
-          if (kingPlayerIdRef.current !== null) {
-            const newKing = ps.find((p) => p.user_id === r.king_player_id);
-            notify(
-              `👑 ${newKing?.pseudo || "Un joueur"} s'empare de la Couronne !`,
-              "gold",
-            );
-          }
-          kingPlayerIdRef.current = r.king_player_id;
         }
 
         if (r.killed_char_id && r.killed_char_id !== lastKilledRef.current) {
-          const n = CHARACTERS.find((c) => c.id == r.killed_char_id)?.name;
-          notify(`🗡️ L'Assassin a décidé d'éliminer le rôle : ${n} !`, "error");
+          notify(
+            `🗡️ L'Assassin a décidé d'éliminer : ${CHARACTERS.find((c) => c.id == r.killed_char_id)?.name} !`,
+            "error",
+          );
           lastKilledRef.current = r.killed_char_id;
         }
 
         if (r.robbed_char_id && r.robbed_char_id !== lastRobbedRef.current) {
-          const n = CHARACTERS.find((c) => c.id == r.robbed_char_id)?.name;
-          notify(`🥷 Le Voleur va détrousser le rôle : ${n} !`, "info");
+          notify(
+            `🥷 Le Voleur va détrousser : ${CHARACTERS.find((c) => c.id == r.robbed_char_id)?.name} !`,
+            "info",
+          );
           lastRobbedRef.current = r.robbed_char_id;
         }
 
         setRoomHostId(r.host_id);
         setGameStatus(r.status);
-        setCurrentPlayerIndex(r.current_player_index);
-        setDraftPile((prev) =>
-          prev.length > 0 &&
-          prev.length < (r.draft_pile || []).length &&
-          (r.draft_pile || []).length < 8
-            ? prev
-            : r.draft_pile || [],
-        );
-        setDraftSubStep(r.draft_sub_step);
+        if (setFaceUpChars) setFaceUpChars(r.face_up_chars || []);
+
+        setDraftPile((prevPile) => {
+          const serverPile = r.draft_pile || [];
+          const isStale =
+            prevPile.length > 0 &&
+            serverPile.length > prevPile.length &&
+            serverPile.length < 8;
+          if (!isStale) {
+            setTimeout(() => {
+              setDraftSubStep(r.draft_sub_step);
+              setCurrentPlayerIndex(r.current_player_index);
+            }, 0);
+            return serverPile;
+          }
+          return prevPile;
+        });
 
         const dbTurn = r.current_character_turn || 1;
         const dbPhase = r.current_turn_phase || "resource";
+        const dbKing = r.king_player_id;
 
+        // ⚡ LE BOUCLIER ABSOLU (Empêche la BD d'annuler les optimisations)
         setCurrentTurnNumber((prevTurn) => {
+          const isLagging =
+            prevTurn > dbTurn && !(prevTurn >= 7 && dbTurn === 1);
+
+          // 👑 1. Le Roi ne recule plus !
+          if (!isLagging || r.status !== "playing") {
+            if (dbKing && dbKing !== kingPlayerIdRef.current) {
+              const newKing = ps.find((p) => p.user_id === dbKing);
+              notify(
+                `👑 ${newKing?.pseudo || "Un joueur"} s'empare de la Couronne !`,
+                "gold",
+              );
+              kingPlayerIdRef.current = dbKing;
+              setKingPlayerId(dbKing);
+            }
+          }
+
+          // ⏳ 2. La Phase ne recule plus !
           setTurnPhase((prevPhase) => {
-            if (prevTurn > dbTurn && !(prevTurn >= 8 && dbTurn === 1))
-              return prevPhase;
+            if (r.status !== "playing") return dbPhase;
+            if (isLagging) return prevPhase; // Si on est en avance, on ignore la BD !
             if (prevTurn === dbTurn) {
               if (
                 prevPhase === "build" &&
@@ -251,16 +251,18 @@ export const useSupabaseSync = (props) => {
             }
             return dbPhase;
           });
+
+          // 🔄 3. Le Tour ne recule plus !
+          if (r.status !== "playing") return dbTurn;
           if (prevTurn >= 8 && dbTurn === 1)
             notify("👑 Nouveau tour : Phase de Recrutement !", "gold");
-          return prevTurn > dbTurn && !(prevTurn >= 8 && dbTurn === 1)
-            ? prevTurn
-            : dbTurn;
+          if (isLagging) return prevTurn;
+
+          return dbTurn;
         });
 
         setKilledId(r.killed_char_id);
         setRobbedId(r.robbed_char_id);
-        setKingPlayerId(r.king_player_id);
         setFirstBuilderId(r.first_builder_id);
         setView(
           r.status === "finished"
@@ -290,9 +292,28 @@ export const useSupabaseSync = (props) => {
         notify(payload.message, payload.type),
       )
       .on("broadcast", { event: "sync_action" }, ({ payload }) => {
+        if (payload.action === "sync_draft") {
+          setDraftPile(payload.draftPile);
+          if (payload.isDraftOver) {
+            setGameStatus("playing");
+            setCurrentTurnNumber(1);
+            setTurnPhase("resource");
+          } else {
+            setCurrentPlayerIndex(payload.currentPlayerIndex);
+            setDraftSubStep(payload.draftSubStep);
+          }
+        }
+
         if (payload.action === "next_turn") {
-          setCurrentTurnNumber(payload.turn);
+          setCurrentTurnNumber((prev) =>
+            payload.turn > prev ? payload.turn : prev,
+          );
           setTurnPhase("resource");
+          if (payload.optimisticPlayers) setPlayers(payload.optimisticPlayers);
+          if (payload.optimisticKing) {
+            setKingPlayerId(payload.optimisticKing);
+            kingPlayerIdRef.current = payload.optimisticKing; // Sécurise la couronne instantanément
+          }
         }
         if (payload.action === "play_animation") {
           setActiveAnimation(payload.data);
@@ -323,11 +344,12 @@ export const useSupabaseSync = (props) => {
         setOnlineIds(Object.keys(channel.presenceState())),
       )
       .subscribe(async (status) => {
-        if (status === "SUBSCRIBED" && myId)
+        if (status === "SUBSCRIBED" && myId) {
           await channel.track({
             online_at: new Date().toISOString(),
             user_id: myId,
           });
+        }
       });
 
     return () => {
@@ -350,19 +372,6 @@ export const useSupabaseSync = (props) => {
     setShowLabModal(false);
     setTurnStartIncome(0);
 
-    if (myId === roomHostId && currentTurnNumber === 4) {
-      const kingOwner = playersRef.current.find((p) =>
-        (p.characters || []).includes(4),
-      );
-      if (kingOwner && kingOwner.user_id !== kingPlayerIdRef.current) {
-        supabase
-          .from("rooms")
-          .update({ king_player_id: kingOwner.user_id })
-          .eq("id", roomId)
-          .then();
-      }
-    }
-
     const me = players.find((p) => p.user_id === myId);
     if (
       me &&
@@ -384,59 +393,12 @@ export const useSupabaseSync = (props) => {
 
       setTurnStartIncome(amount);
 
-      if (robbedId === currentTurnNumber && killedId !== currentTurnNumber) {
-        const thief = players.find((p) => (p.characters || []).includes(2));
-        if (thief && me.gold > 0) {
-          const goldToSteal = me.gold;
-          supabase
-            .from("players")
-            .update({ gold: 0 })
-            .eq("user_id", myId)
-            .eq("room_id", roomId)
-            .then();
-          supabase
-            .from("players")
-            .update({ gold: thief.gold + goldToSteal })
-            .eq("user_id", thief.user_id)
-            .eq("room_id", roomId)
-            .then();
-          notify(`VOUS AVEZ ÉTÉ VOLÉ ! (-${goldToSteal} Or)`, "error");
-        }
-      }
-
-      if (currentTurnNumber === 6 && killedId !== 6) {
-        supabase
-          .from("players")
-          .update({ gold: me.gold + 1 })
-          .eq("user_id", myId)
-          .then(() => notify("Bonus Marchand : +1 Or", "gold"));
-      }
-
-      if (currentTurnNumber === 7 && killedId !== 7) {
-        const fetchBonus = async () => {
-          const { data: r } = await supabase
-            .from("rooms")
-            .select("district_stack")
-            .eq("id", roomId)
-            .single();
-          const freshStack = await rebuildDeckIfNeeded(
-            r.district_stack || [],
-            2,
-          );
-          let stack = [...freshStack];
-          const drawn = stack.splice(0, 2);
-          await supabase
-            .from("rooms")
-            .update({ district_stack: stack })
-            .eq("id", roomId);
-          await supabase
-            .from("players")
-            .update({ hand: [...(me.hand || []), ...drawn] })
-            .eq("user_id", myId);
-          notify("Architecte : +2 Cartes", "info");
-        };
-        fetchBonus();
-      }
+      if (robbedId === currentTurnNumber && killedId !== currentTurnNumber)
+        notify(`VOUS AVEZ ÉTÉ VOLÉ !`, "error");
+      if (currentTurnNumber === 6 && killedId !== 6)
+        notify("Bonus Marchand : +1 Or", "gold");
+      if (currentTurnNumber === 7 && killedId !== 7)
+        notify("Architecte : +2 Cartes", "info");
     }
   }, [currentTurnNumber, gameStatus, killedId]);
 };

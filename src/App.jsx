@@ -39,6 +39,8 @@ function App() {
   const [draftSubStep, setDraftSubStep] = useState("pick");
   const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
 
+  const [faceUpChars, setFaceUpChars] = useState([]);
+
   const [drawOptions, setDrawOptions] = useState([]);
   const [killedId, setKilledId] = useState(null);
   const [robbedId, setRobbedId] = useState(null);
@@ -173,6 +175,10 @@ function App() {
     setActiveAnimation,
     gameStatus,
     setGameStatus,
+    setPlayers,
+    setKilledId,
+    setRobbedId,
+    setKingPlayerId,
   });
 
   useSupabaseSync({
@@ -234,6 +240,8 @@ function App() {
     forceNextTurn: actions.forceNextTurn,
     channelRef,
     setActiveAnimation,
+    processPassives: actions.processPassives,
+    setFaceUpChars,
   });
 
   if (loading)
@@ -333,6 +341,7 @@ function App() {
         forceNextTurn={actions.forceNextTurn}
         activeAnimation={activeAnimation}
         quitGame={actions.quitGame}
+        faceUpChars={faceUpChars}
       />
     );
 

@@ -58,6 +58,7 @@ const GameView = (props) => {
     useLab,
     activeAnimation,
     quitGame,
+    faceUpChars,
   } = props;
 
   const me = players.find((p) => p.user_id === myId);
@@ -309,7 +310,6 @@ const GameView = (props) => {
   const someoneHasActiveChar = players.some((p) =>
     (p.characters || []).includes(currentTurnNumber),
   );
-
   const hasLab = (me.city || []).some(
     (id) => districtMap[id]?.name === "Laboratoire",
   );
@@ -706,7 +706,6 @@ const GameView = (props) => {
                   };
               }
             };
-
             const theme = getTooltipTheme(tooltip.color);
             const screenW = window.innerWidth;
             const screenH = window.innerHeight;
@@ -749,6 +748,40 @@ const GameView = (props) => {
         <div className="h-[140px] shrink-0 bg-stone-900/90 border-b-4 border-stone-800 shadow-xl flex items-center px-4 gap-4 overflow-x-auto z-20 inner-shadow">
           {opponentsRender}
         </div>
+
+        {faceUpChars && faceUpChars.length > 0 && (
+          <div
+            className="absolute left-4 top-40 z-30 bg-stone-900/80 border-2 border-stone-700 p-2 rounded-lg flex flex-col items-center shadow-lg backdrop-blur-sm pointer-events-none"
+            style={{ animation: "modalAppear 0.5s ease-out forwards" }}
+          >
+            <span className="text-[9px] text-stone-400 uppercase tracking-widest mb-2 font-bold text-center leading-tight">
+              Écartés
+              <br />
+              (Visibles)
+            </span>
+            <div className="flex flex-col gap-2">
+              {faceUpChars.map((cid) => {
+                const char = charMap[cid];
+                const style = getCharColors(cid);
+                return (
+                  <div
+                    key={cid}
+                    className={`w-12 h-16 rounded border-2 ${style.border} ${style.bg} flex flex-col items-center justify-center opacity-70 grayscale-[30%] shadow-inner`}
+                  >
+                    <span className={`text-2xl font-black ${style.text}`}>
+                      {cid}
+                    </span>
+                    <span
+                      className={`text-[6px] uppercase font-bold tracking-widest ${style.text}`}
+                    >
+                      {char?.name}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="flex-1 relative flex flex-col items-center justify-center p-2 overflow-hidden z-40">
           {renderDraft && (
@@ -853,6 +886,25 @@ const GameView = (props) => {
             </div>
           )}
 
+          {gameStatus === "drafting" && !renderDraft && (
+            <div
+              className="flex flex-col items-center justify-center bg-stone-900/80 p-8 rounded-2xl border-2 border-stone-700 shadow-2xl backdrop-blur-sm z-50"
+              style={{ animation: "modalAppear 0.5s ease-out forwards" }}
+            >
+              <div className="w-16 h-16 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mb-6 shadow-[0_0_15px_rgba(245,158,11,0.5)]"></div>
+              <h3 className="text-2xl md:text-3xl text-amber-500 font-black tracking-[0.1em] uppercase text-center drop-shadow-md">
+                En attente de
+                <br />
+                <span className="text-white">
+                  {players[currentPlayerIndex]?.pseudo || "l'adversaire"}
+                </span>
+              </h3>
+              <p className="text-stone-400 mt-4 text-sm uppercase tracking-widest font-bold">
+                Choix du rôle en cours...
+              </p>
+            </div>
+          )}
+
           {gameStatus === "playing" && !isMyDraftTurn && (
             <div className="flex flex-col items-center w-full h-full justify-center">
               <div className="flex flex-col items-center mb-4 relative scale-90 transition-all duration-500">
@@ -900,50 +952,6 @@ const GameView = (props) => {
                   <h3 className="text-xl text-center text-amber-100 mb-4 uppercase tracking-[0.3em] border-b-2 border-stone-800 pb-2">
                     Votre Tour, Messire
                   </h3>
-                  {currentTurnNumber === 3 && magicMode && !abilityUsed && (
-                    <div
-                      className="mb-4 bg-purple-900/30 p-3 rounded border border-purple-500"
-                      style={{
-                        animation: "slideUpFade 0.4s ease-out forwards",
-                      }}
-                    >
-                      <h4 className="text-purple-300 font-bold mb-2">
-                        GRIMOIRE
-                      </h4>
-                      {magicMode === "player" && (
-                        <div className="flex gap-2 overflow-x-auto">
-                          {opponents.map((o) => (
-                            <button
-                              key={o.id}
-                              onClick={() => magicianSwapPlayer(o.user_id)}
-                              className="bg-purple-800 px-3 py-1 rounded text-xs hover:bg-purple-700 transition-colors"
-                            >
-                              Échanger avec {o.pseudo}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {magicMode === "deck" && (
-                        <div className="text-center">
-                          <p className="text-xs mb-2">
-                            Sélectionnez vos cartes en main, puis validez.
-                          </p>
-                          <button
-                            onClick={magicianSwapDeck}
-                            className="bg-purple-600 px-4 py-2 rounded font-bold hover:bg-purple-500 transition-colors shadow-lg"
-                          >
-                            ÉCHANGER ({magicSelectedCards.length})
-                          </button>
-                        </div>
-                      )}
-                      <button
-                        onClick={() => setMagicMode(null)}
-                        className="text-xs text-red-400 mt-2 underline hover:text-red-300"
-                      >
-                        Annuler
-                      </button>
-                    </div>
-                  )}
 
                   {(turnPhase === "resource" || !turnPhase) && (
                     <div
@@ -1034,29 +1042,79 @@ const GameView = (props) => {
                         </div>
                       )}
 
+                      {/* ⚡ LE BOUTON MAGICIEN EST DE RETOUR ! */}
                       {currentTurnNumber === 3 &&
                         !magicMode &&
                         !abilityUsed && (
                           <div
-                            className="flex gap-2 justify-center"
+                            className="bg-purple-950/40 p-3 rounded border-purple-900/50 text-center"
                             style={{
                               animation: "slideUpFade 0.4s ease-out forwards",
                             }}
                           >
-                            <button
-                              onClick={() => setMagicMode("player")}
-                              className="bg-purple-900 px-3 py-1 rounded text-purple-200 border border-purple-500 hover:bg-purple-800 transition-colors"
-                            >
-                              Échanger Joueur
-                            </button>
-                            <button
-                              onClick={() => setMagicMode("deck")}
-                              className="bg-purple-900 px-3 py-1 rounded text-purple-200 border border-purple-500 hover:bg-purple-800 transition-colors"
-                            >
-                              Échanger Pioche
-                            </button>
+                            <p className="text-[10px] font-bold text-purple-500 uppercase mb-2">
+                              Le Grimoire
+                            </p>
+                            <div className="flex gap-2 justify-center">
+                              <button
+                                onClick={() => setMagicMode("player")}
+                                className="bg-purple-900 px-3 py-1 rounded text-purple-200 border border-purple-500 hover:bg-purple-800 transition-colors"
+                              >
+                                Échanger Joueur
+                              </button>
+                              <button
+                                onClick={() => setMagicMode("deck")}
+                                className="bg-purple-900 px-3 py-1 rounded text-purple-200 border border-purple-500 hover:bg-purple-800 transition-colors"
+                              >
+                                Échanger Pioche
+                              </button>
+                            </div>
                           </div>
                         )}
+
+                      {currentTurnNumber === 3 && magicMode && !abilityUsed && (
+                        <div
+                          className="mb-4 bg-purple-900/30 p-3 rounded border border-purple-500"
+                          style={{
+                            animation: "slideUpFade 0.4s ease-out forwards",
+                          }}
+                        >
+                          {magicMode === "player" && (
+                            <div className="flex gap-2 overflow-x-auto">
+                              {opponents.map((o) => (
+                                <button
+                                  key={o.id}
+                                  onClick={() => magicianSwapPlayer(o.user_id)}
+                                  className="bg-purple-800 px-3 py-1 rounded text-xs hover:bg-purple-700 transition-colors"
+                                >
+                                  Échanger avec {o.pseudo}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {magicMode === "deck" && (
+                            <div className="text-center">
+                              <p className="text-xs mb-2 text-purple-200">
+                                Sélectionnez vos cartes en main, puis validez.
+                              </p>
+                              <button
+                                onClick={magicianSwapDeck}
+                                className="bg-purple-600 px-4 py-2 rounded font-bold hover:bg-purple-500 transition-colors shadow-lg"
+                              >
+                                ÉCHANGER ({magicSelectedCards.length})
+                              </button>
+                            </div>
+                          )}
+                          <div className="text-center mt-2">
+                            <button
+                              onClick={() => setMagicMode(null)}
+                              className="text-xs text-red-400 underline hover:text-red-300"
+                            >
+                              Annuler
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {currentTurnNumber === 8 && !warMode && !abilityUsed && (
                         <div

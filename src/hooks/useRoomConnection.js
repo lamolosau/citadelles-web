@@ -107,8 +107,17 @@ export const useRoomConnection = (props) => {
 
     const pc = latestPlayers.length;
     let c = shuffle([...CHARACTERS]);
-    const fd = c.pop();
-    const fu = c.splice(0, pc === 4 ? 2 : pc === 5 ? 1 : 0);
+    let fd = null;
+    let fuCount = 0;
+
+    // Règles d'écartement
+    if (pc < 8) {
+      fd = c.pop()?.id; // Face cachée (sauf pour 8 joueurs)
+    }
+    if (pc === 4) fuCount = 2; // 2 faces visibles à 4 joueurs
+    if (pc === 5) fuCount = 1; // 1 face visible à 5 joueurs
+
+    const fu = c.splice(0, fuCount).map((char) => char.id);
 
     await supabase
       .from("rooms")
@@ -116,19 +125,31 @@ export const useRoomConnection = (props) => {
         status: "drafting",
         district_stack: d,
         draft_pile: c,
-        face_down_char: fd.id,
+        face_down_char: fd,
         face_up_chars: fu,
         current_player_index: 0,
         current_character_turn: 1,
+        current_turn_phase: "resource",
+        killed_char_id: null,
+        robbed_char_id: null,
+        first_builder_id: null,
       })
       .eq("id", roomId);
   };
 
   const backToLobby = async () => {
+    // ⚡ CORRECTION : Nettoyage propre au retour au lobby
     await Promise.all([
       supabase
         .from("rooms")
-        .update({ status: "waiting", first_builder_id: null })
+        .update({
+          status: "waiting",
+          first_builder_id: null,
+          killed_char_id: null,
+          robbed_char_id: null,
+          current_character_turn: 1,
+          current_turn_phase: "resource",
+        })
         .eq("id", roomId),
       supabase
         .from("players")
