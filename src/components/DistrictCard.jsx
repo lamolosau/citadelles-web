@@ -1,8 +1,25 @@
-import { DISTRICTS, getCardDesc } from "../data/gameData";
+import { getCardDesc } from "../data/gameData";
+import { DISTRICT_MAP } from "../utils/gameLogic";
 
-// ==========================================
-// COMPOSANT : DistrictCard
-// ==========================================
+const COLOR_THEMES = {
+  yellow: {
+    border: "border-amber-500",
+    bg: "bg-amber-950",
+    text: "text-amber-300",
+  },
+  blue: { border: "border-sky-600", bg: "bg-sky-950", text: "text-sky-300" },
+  green: {
+    border: "border-emerald-600",
+    bg: "bg-emerald-950",
+    text: "text-emerald-300",
+  },
+  red: { border: "border-red-600", bg: "bg-red-950", text: "text-red-300" },
+  default: {
+    border: "border-purple-500",
+    bg: "bg-purple-950",
+    text: "text-purple-300",
+  },
+};
 
 const DistrictCard = ({
   id,
@@ -12,39 +29,10 @@ const DistrictCard = ({
   destroyable,
   setTooltip,
 }) => {
-  const c = DISTRICTS.find((d) => d.id == id);
+  const c = DISTRICT_MAP[id];
   if (!c) return null;
 
-  let colors = {
-    border: "border-purple-500",
-    bg: "bg-purple-950",
-    text: "text-purple-300",
-  };
-
-  if (c.color === "yellow")
-    colors = {
-      border: "border-amber-500",
-      bg: "bg-amber-950",
-      text: "text-amber-300",
-    };
-  if (c.color === "blue")
-    colors = {
-      border: "border-sky-600",
-      bg: "bg-sky-950",
-      text: "text-sky-300",
-    };
-  if (c.color === "green")
-    colors = {
-      border: "border-emerald-600",
-      bg: "bg-emerald-950",
-      text: "text-emerald-300",
-    };
-  if (c.color === "red")
-    colors = {
-      border: "border-red-600",
-      bg: "bg-red-950",
-      text: "text-red-300",
-    };
+  const colors = COLOR_THEMES[c.color] || COLOR_THEMES.default;
 
   const handleEnter = (e) =>
     setTooltip &&
@@ -68,15 +56,15 @@ const DistrictCard = ({
 
   return (
     <div
-      onClick={!disabled ? onClick : null}
+      onClick={!disabled ? onClick : undefined}
       onMouseEnter={handleEnter}
       onMouseLeave={handleLeave}
       onMouseMove={handleMove}
       className={`relative flex flex-col border-[3px] rounded-lg overflow-hidden transition-all duration-300
-            ${small ? "w-10 h-14 text-[6px]" : "w-32 h-52 text-xs"} ${colors.border}
-            ${disabled ? "cursor-default" : "cursor-pointer card-shadow hover:-translate-y-6 hover:scale-110 hover:z-50"}
-            ${destroyable ? "animate-pulse cursor-crosshair ring-4 ring-red-600" : ""}
-            bg-gradient-to-br from-stone-800 to-stone-950`}
+        ${small ? "w-10 h-14 text-[6px]" : "w-32 h-52 text-xs"} ${colors.border}
+        ${disabled ? "cursor-default" : "cursor-pointer card-shadow hover:-translate-y-6 hover:scale-110 hover:z-50"}
+        ${destroyable ? "animate-pulse cursor-crosshair ring-4 ring-red-600" : ""}
+        bg-gradient-to-br from-stone-800 to-stone-950`}
     >
       <div
         className={`p-1 flex justify-between items-center ${colors.bg} border-b ${colors.border}`}

@@ -1,9 +1,5 @@
 import { CHARACTERS } from "../data/gameData";
 
-// ==========================================
-// 2. STYLES ET COULEURS
-// ==========================================
-
 export const GLOBAL_STYLES = `
 @import url('https://fonts.googleapis.com/css2?family=MedievalSharp&display=swap');
 body { font-family: 'MedievalSharp', cursive; background-color: #0c0a09; color: #fffbeb; overflow: hidden; cursor: default; }
@@ -18,44 +14,31 @@ body { font-family: 'MedievalSharp', cursive; background-color: #0c0a09; color: 
 .modal-overlay { background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(4px); }
 `;
 
+const COLOR_MAPS = {
+  yellow: {
+    border: "border-amber-500",
+    bg: "bg-amber-950",
+    text: "text-amber-500",
+  },
+  blue: { border: "border-sky-600", bg: "bg-sky-950", text: "text-sky-400" },
+  green: {
+    border: "border-emerald-600",
+    bg: "bg-emerald-950",
+    text: "text-emerald-400",
+  },
+  red: { border: "border-red-600", bg: "bg-red-950", text: "text-red-500" },
+  default: {
+    border: "border-stone-400",
+    bg: "bg-stone-800",
+    text: "text-stone-300",
+  },
+};
+
+const CHAR_COLORS_MAP = CHARACTERS.reduce((acc, c) => {
+  acc[c.id] = COLOR_MAPS[c.color] || COLOR_MAPS.default;
+  return acc;
+}, {});
+
 export const getCharColors = (id) => {
-  const c = CHARACTERS.find((x) => x.id == id);
-  if (!c)
-    return {
-      border: "border-stone-500",
-      bg: "bg-stone-800",
-      text: "text-stone-300",
-    };
-  switch (c.color) {
-    case "yellow":
-      return {
-        border: "border-amber-500",
-        bg: "bg-amber-950",
-        text: "text-amber-500",
-      };
-    case "blue":
-      return {
-        border: "border-sky-600",
-        bg: "bg-sky-950",
-        text: "text-sky-400",
-      };
-    case "green":
-      return {
-        border: "border-emerald-600",
-        bg: "bg-emerald-950",
-        text: "text-emerald-400",
-      };
-    case "red":
-      return {
-        border: "border-red-600",
-        bg: "bg-red-950",
-        text: "text-red-500",
-      };
-    default:
-      return {
-        border: "border-stone-400",
-        bg: "bg-stone-800",
-        text: "text-stone-300",
-      };
-  }
+  return CHAR_COLORS_MAP[id] || COLOR_MAPS.default;
 };

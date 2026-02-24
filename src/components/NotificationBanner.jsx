@@ -1,17 +1,16 @@
-// ==========================================
-// COMPOSANT : NotificationBanner
-// ==========================================
+import { memo } from "react";
 
-const NotificationBanner = ({ message, type }) => {
+const STYLES = {
+  error: "bg-red-900/95 border-red-500 text-red-100",
+  success: "bg-green-900/95 border-green-500 text-green-100",
+  info: "bg-blue-900/95 border-blue-500 text-blue-100",
+  gold: "bg-amber-900/95 border-amber-500 text-amber-100",
+  default: "bg-stone-800 border-stone-500 text-stone-200",
+};
+
+const NotificationBanner = memo(({ message, type }) => {
   if (!message) return null;
-
-  let style = "bg-stone-800 border-stone-500 text-stone-200";
-  if (type === "error") style = "bg-red-900/95 border-red-500 text-red-100";
-  if (type === "success")
-    style = "bg-green-900/95 border-green-500 text-green-100";
-  if (type === "info") style = "bg-blue-900/95 border-blue-500 text-blue-100";
-  if (type === "gold")
-    style = "bg-amber-900/95 border-amber-500 text-amber-100";
+  const style = STYLES[type] || STYLES.default;
 
   return (
     <div
@@ -20,6 +19,6 @@ const NotificationBanner = ({ message, type }) => {
       {message}
     </div>
   );
-};
+});
 
 export default NotificationBanner;
