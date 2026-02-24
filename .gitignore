@@ -28,3 +28,4 @@ dist-ssr
 dist/
 dist-ssr/
 node_modules/
+public/sounds/
